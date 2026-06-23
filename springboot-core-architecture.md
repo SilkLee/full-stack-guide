@@ -2622,7 +2622,9 @@ public abstract class CacheAspectSupport {
 | **第二部分** | 8-15 | Spring IoC、循环依赖、AOP、MVC、事务、事件 | 想深入 Spring Framework 核心 |
 | **第三部分** | 16-22 | Actuator、JPA、Security、Starter、Test、异常、Cache | 想掌握 Spring 生态组件 |
 | **第四部分** | 24-32 | 设计哲学、常见坑、调试、性能、最佳实践、3.x 新特性、迁移、速查卡、思考题 | 想从"会用"到"专家" |
-| **第五部分** | 33-35 | 10 种设计模式落地、6 个关键算法、速查总结 | 想理解 Spring 的设计智慧和面试高分 |
+| **第五部分** | 33-35 | 10 种设计模式落地、6 个关键算法、速查总结 | 想理解设计智慧和面试高分 |
+| **第六部分** | 36-39 | Spring Cloud（Nacos/Sentinel/Gateway）、MyBatis 源码 | 想扩展 Spring 生态广度 |
+| **附录** | — | 17 个核心类 GitHub 源码直链 | 想对照源码阅读
 
 ---
 
@@ -3414,6 +3416,29 @@ rewrite {
 | 21 | `@ControllerAdvice` 收窄异常 → `BasicErrorController` 兜底 | `BasicErrorController` | 全局异常处理怎么实现？ |
 | 22 | `CacheInterceptor` AOP 拦截，`CacheManager` 多种后端 | `CacheInterceptor` | @Cacheable 原理？缓存穿透？ |
 
+### 第四部分速查
+
+| 章 | 一句话 | 关键类 | 高频面试题 |
+|----|--------|--------|------------|
+| 24 | Spring 每个设计决策都是权衡，理解 WHY 比 HOW 重要 | `AbstractApplicationContext` | 为什么 refresh() 分 12 步？ |
+| 25 | 十大高频坑：自调用、构造器循环、@Async 失效… | - | @Transactional 自调用失效怎么解决？ |
+| 26 | `--debug` / `ConditionEvaluationReport` / Actuator 三板斧 | `ConditionEvaluationReport` | 自动配置不生效怎么排查？ |
+| 27 | 懒加载/AOT/虚拟线程/HikariCP 启动性能四件套 | - | Spring Boot 3.x 启动怎么优化？ |
+| 28 | 构造器注入 > 字段注入，AOP vs Interceptor 选型 | - | 依赖注入最佳实践？ |
+| 29 | Jakarta EE、AOT、虚拟线程、ProblemDetail、Observability | - | Spring Boot 3.x 最大变化？ |
+| 30 | OpenRewrite 自动化 + 8 步手动清单 | - | Boot 2.x 到 3.x 怎么迁移？ |
+
+### 第五部分速查
+
+| 章 | 一句话 | 关键类 | 高频面试题 |
+|----|--------|--------|------------|
+| 33 | 10 种 GoF 模式在 Spring 中的落地位置 | `FactoryBean`、`InterceptorChain` | Spring 用了哪些设计模式？ |
+| 34 | 三级缓存 O(1) 查找、拓扑排序、AntPath 分治匹配 | `AntPathMatcher` | 循环依赖的算法复杂度？ |
+| 36 | Nacos 注册发现 + 配置长轮询 | `NacosServiceRegistry` | Nacos vs Eureka vs Consul？ |
+| 37 | Sentinel 限流/熔断/降级，QPS + 线程数双控 | `SphU` | Sentinel vs Hystrix？ |
+| 38 | Gateway 基于 WebFlux+Netty，非阻塞 I/O | `RouteLocator` | Gateway vs Zuul vs Nginx？ |
+| 39 | MapperProxy JDK 代理 + 插件拦截链 + L1/L2 缓存 | `MapperProxy`、`InterceptorChain` | MyBatis 插件原理？一二级缓存？ |
+
 ---
 
 ## 32. 互动思考题
@@ -3436,6 +3461,26 @@ rewrite {
 8. `@TransactionalEventListener(phase = AFTER_COMMIT)` 如果事务回滚了，监听器还会执行吗？AFTER_COMPLETION 呢？
 9. Spring Data JPA 的方法名解析支持哪些关键词？`findByAgeGreaterThanAndNameLike` 会被翻译成什么 JPQL？
 
+### 第四部分
+
+10. 一个 `@Service` 类有 10 个 `@Autowired` 字段，怎么判断这个类是否需要重构？
+11. `spring.main.lazy-initialization=true` 开启后，`@Scheduled` 定时任务还执行吗？为什么？
+12. 启动时输出 `ConditionEvaluationReport`，发现 `DataSourceAutoConfiguration` 匹配成功但 `HibernateJpaAutoConfiguration` 未匹配。可能是什么原因？
+
+### 第五部分
+
+13. `FactoryBean` 和 `BeanFactory` 是什么关系？命名为什么这么容易混淆？
+14. `ReflectiveMethodInvocation` 的 `proceed()` 方法中 `currentInterceptorIndex` 是如何递增的？画出调用栈。
+15. `ResolvableType` 如何反向推导 `JpaRepository<User, Long>` 的泛型参数 `User` 和 `Long`？
+
+### 第六部分
+
+16. Nacos 配置中心的长轮询和短轮询的区别？长轮询的超时时间默认多少？为什么？
+17. Sentinel 的"关联限流"和"热点限流"分别解决什么问题？给出一个生产场景。
+18. Gateway 的 Filter 和 Spring MVC 的 Interceptor 有什么区别？能互相替代吗？
+19. MyBatis 插件为什么只能拦截 Executor/StatementHandler/ParameterHandler/ResultSetHandler 四种对象？
+20. MyBatis 一级缓存在 Spring 集成后每次查询都失效，为什么？如何解决？
+
 ### 思考题参考答案（简要）
 
 | # | 答案要点 |
@@ -3449,6 +3494,17 @@ rewrite {
 | 7 | `@WebMvcTest` 通过 `@TypeExcludeFilters` 排除了 `@Service` `@Repository` |
 | 8 | 回滚时 AFTER_COMMIT 不触发，AFTER_COMPLETION 会触发（含 `AFTER_ROLLBACK`） |
 | 9 | 翻译为 `WHERE age > ? AND name LIKE ?`，支持 ~20 个关键词 |
+| 10 | 10 个依赖说明该类职责过重，应拆分为 3-4 个小 Service |
+| 11 | 不会！`@Scheduled` 依赖 `TaskScheduler` Bean，懒加载会导致未初始化 |
+| 12 | 缺少 JPA 依赖（`spring-boot-starter-data-jpa`），或 DataSource 不是 `javax.sql.DataSource` |
+| 13 | `FactoryBean` 是创建复杂 Bean 的工厂，`BeanFactory` 是整个 IoC 容器的根接口 |
+| 14 | 每次 `proceed()` 递增 `currentInterceptorIndex`，取出下一个拦截器，将 `this` 传给它，拦截器内部再次调用 `proceed()` 形成递归链 |
+| 15 | 通过 `getGenericInterfaces()` → `ParameterizedType.getActualTypeArguments()` |
+| 16 | 长轮询 30s 超时→重连，比短轮询省 97% 请求；短轮询 1s 一次 |
+| 17 | 关联：支付接口 QPS 过高时限流下单接口；热点：userId=999 限 100 QPS，其他不限 |
+| 18 | Gateway Filter 在请求到达 Controller 之前；MVC Interceptor 在 DispatcherServlet 内；不能互相替代 |
+| 19 | 因为这四种对象覆盖了 MyBatis 的完整 SQL 执行生命周期：参数处理→SQL 执行→结果映射→语句处理 |
+| 20 | `SqlSessionTemplate` 每次查询创建新 SqlSession；解决：手动开启二级缓存或将查询放在同一事务内 |
 
 ---
 
