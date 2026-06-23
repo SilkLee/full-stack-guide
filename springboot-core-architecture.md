@@ -23,28 +23,28 @@
 Spring Boot 的核心设计哲学是 **"约定优于配置"（Convention over Configuration）**。它在 Spring Framework 之上构建了四个关键层：
 
 ```mermaid
-graph TB
-    subgraph "应用层 Application Layer"
-        A[你的 Spring Boot 应用<br/>@SpringBootApplication]
+flowchart TB
+    subgraph APP["应用层 Application Layer"]
+        A["你的 Spring Boot 应用<br/>@SpringBootApplication"]
     end
 
-    subgraph "自动配置层 Auto-Configuration"
-        B1[@EnableAutoConfiguration]
-        B2[AutoConfigurationImportSelector]
-        B3[xxxAutoConfiguration 类]
-        B4[@Conditional 条件注解]
+    subgraph AC["自动配置层 Auto-Configuration"]
+        B1["@EnableAutoConfiguration"]
+        B2["AutoConfigurationImportSelector"]
+        B3["xxxAutoConfiguration 类"]
+        B4["@Conditional 条件注解"]
     end
 
-    subgraph "启动层 Bootstrap Layer"
-        C1[SpringApplication]
-        C2[ApplicationContext]
-        C3[SpringApplicationRunListener]
+    subgraph BL["启动层 Bootstrap Layer"]
+        C1["SpringApplication"]
+        C2["ApplicationContext"]
+        C3["SpringApplicationRunListener"]
     end
 
-    subgraph "基础设施层 Infrastructure"
-        D1[内嵌 Tomcat/Jetty/Undertow]
-        D2[外部化配置 Environment]
-        D3[SpringFactoriesLoader / imports]
+    subgraph INFRA["基础设施层 Infrastructure"]
+        D1["内嵌 Tomcat/Jetty/Undertow"]
+        D2["外部化配置 Environment"]
+        D3["SpringFactoriesLoader / imports"]
     end
 
     A --> C1
@@ -317,7 +317,10 @@ flowchart TD
     G --> G3["@ConditionalOnProperty<br/>配置是否满足？"]
     G --> G4["@ConditionalOnWebApplication<br/>是否 Web 环境？"]
     
-    G1 & G2 & G3 & G4 --> H["过滤后的自动配置类"]
+    G1 --> H["过滤后的自动配置类"]
+    G2 --> H
+    G3 --> H
+    G4 --> H
     
     H --> I["AutoConfigurationSorter<br/>按 @AutoConfigureOrder<br/>@AutoConfigureBefore/After 排序"]
     
@@ -437,28 +440,18 @@ org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
 ### 3.6 @Conditional 条件注解体系
 
 ```mermaid
-classDiagram
-    class Condition {
-        <<interface>>
-        +matches(ConditionContext, AnnotatedTypeMetadata) boolean
-    }
+flowchart TB
+    Condition["Condition<br/>(interface)"] --> SpringBootCondition["SpringBootCondition<br/>(abstract)"]
+    SpringBootCondition --> OnClassCondition["OnClassCondition"]
+    SpringBootCondition --> OnBeanCondition["OnBeanCondition"]
+    SpringBootCondition --> OnPropertyCondition["OnPropertyCondition"]
+    SpringBootCondition --> OnWebApplicationCondition["OnWebApplicationCondition"]
+    SpringBootCondition --> OnResourceCondition["OnResourceCondition"]
     
-    class SpringBootCondition {
-        +matches() boolean
-        +getMatchOutcome() ConditionOutcome
-    }
-    
-    Condition <|-- SpringBootCondition
-    SpringBootCondition <|-- OnClassCondition
-    SpringBootCondition <|-- OnBeanCondition
-    SpringBootCondition <|-- OnPropertyCondition
-    SpringBootCondition <|-- OnWebApplicationCondition
-    SpringBootCondition <|-- OnResourceCondition
-    
-    note for OnClassCondition "@ConditionalOnClass<br/>@ConditionalOnMissingClass"
-    note for OnBeanCondition "@ConditionalOnBean<br/>@ConditionalOnMissingBean<br/>@ConditionalOnSingleCandidate"
-    note for OnPropertyCondition "@ConditionalOnProperty"
-    note for OnWebApplicationCondition "@ConditionalOnWebApplication<br/>@ConditionalOnNotWebApplication"
+    OnClassCondition -.- A["@ConditionalOnClass<br/>@ConditionalOnMissingClass"]
+    OnBeanCondition -.- B["@ConditionalOnBean<br/>@ConditionalOnMissingBean"]
+    OnPropertyCondition -.- C["@ConditionalOnProperty"]
+    OnWebApplicationCondition -.- D["@ConditionalOnWebApplication<br/>@ConditionalOnNotWebApplication"]
 ```
 
 常用条件注解：
@@ -738,7 +731,12 @@ flowchart TD
     E --> F5["环境变量"]
     E --> F6["系统属性"]
     
-    F1 & F2 & F3 & F4 & F5 & F6 --> G["合并为 PropertySources"]
+    F1 --> G["合并为 PropertySources"]
+    F2 --> G
+    F3 --> G
+    F4 --> G
+    F5 --> G
+    F6 --> G
     G --> H["PropertySourcesPlaceholderConfigurer<br/>解析 ${...} 占位符"]
     H --> I["@Value / @ConfigurationProperties<br/>绑定到 Bean"]
 ```
