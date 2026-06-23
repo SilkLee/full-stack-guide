@@ -1,0 +1,858 @@
+# JVM 源码深度解析
+
+> **HotSpot JVM** 架构全景，覆盖类加载 → 内存模型 → GC → JIT 编译 → 调优实战，图文并茂。
+
+---
+
+## 目录
+
+- [1. JVM 总体架构](#1-jvm-总体架构)
+- [2. 类加载子系统](#2-类加载子系统)
+- [3. 运行时数据区](#3-运行时数据区)
+- [4. 对象创建与内存布局](#4-对象创建与内存布局)
+- [5. 垃圾回收算法](#5-垃圾回收算法)
+- [6. 经典垃圾收集器](#6-经典垃圾收集器)
+- [7. 低延迟收集器：G1 / ZGC / Shenandoah](#7-低延迟收集器g1--zgc--shenandoah)
+- [8. JIT 即时编译](#8-jit-即时编译)
+- [9. 类文件结构与字节码](#9-类文件结构与字节码)
+- [10. JVM 启动流程](#10-jvm-启动流程)
+- [11. JVM 调优实战](#11-jvm-调优实战)
+- [12. 常见 OOM 与排查](#12-常见-oom-与排查)
+
+---
+
+## 1. JVM 总体架构
+
+```mermaid
+flowchart TB
+    subgraph CLASSLOADER["类加载子系统"]
+        LOAD["加载 Loading"]
+        LINK["链接 Linking"]
+        INIT["初始化 Initialization"]
+        LOAD --> LINK --> INIT
+    end
+
+    subgraph RUNTIME["运行时数据区 Runtime Data Areas"]
+        HEAP["堆 Heap<br/>- 所有线程共享<br/>- GC 主要区域"]
+        META["元空间 Metaspace<br/>- 类元数据<br/>- 运行时常量池"]
+        STACK["虚拟机栈 JVM Stack<br/>- 线程私有<br/>- 栈帧 Frame"]
+        PC["程序计数器 PC Register<br/>- 线程私有"]
+        NATIVE["本地方法栈<br/>Native Method Stack"]
+    end
+
+    subgraph ENGINE["执行引擎 Execution Engine"]
+        INTERP["解释器 Interpreter"]
+        JIT["JIT 编译器<br/>C1 / C2"]
+        GC["垃圾回收器 GC"]
+    end
+
+    subgraph NATIVE_IF["本地方法接口 JNI"]
+        NLIB["Native 方法库"]
+    end
+
+    CLASSLOADER --> RUNTIME
+    RUNTIME --> ENGINE
+    ENGINE <--> NATIVE_IF
+```
+
+**JVM 规范 vs HotSpot 实现**：
+
+| 组件 | JVM 规范定义 | HotSpot 实现 |
+|------|-------------|-------------|
+| 类加载器 | 双亲委派模型 | `Bootstrap` → `Platform` → `App` 三级 |
+| 堆 | 对象存储区 | 分代：新生代(Eden+S0+S1) + 老年代 |
+| 方法区 | 类元数据存储 | 元空间 Metaspace(直接内存) |
+| GC | 自动内存回收 | 7 种收集器可选 |
+| JIT | 热点代码编译 | C1(Client) + C2(Server) 分层编译 |
+
+---
+
+## 2. 类加载子系统
+
+### 2.1 类加载三阶段
+
+```mermaid
+sequenceDiagram
+    participant Disk as .class 文件
+    participant Loader as ClassLoader
+    participant JVM as JVM
+
+    Note over Disk,JVM: 阶段1: 加载 Loading
+    Disk->>Loader: 读取字节流
+    Loader->>JVM: 生成 Class 对象
+
+    Note over Disk,JVM: 阶段2: 链接 Linking
+    JVM->>JVM: 验证 Verify<br/>文件格式/元数据/字节码/符号引用
+    JVM->>JVM: 准备 Prepare<br/>为 static 变量分配内存并赋零值
+    JVM->>JVM: 解析 Resolve<br/>符号引用 → 直接引用
+
+    Note over Disk,JVM: 阶段3: 初始化 Init
+    JVM->>JVM: 执行 static 代码块和赋值
+    JVM->>JVM: 类初始化完成
+```
+
+### 2.2 双亲委派模型
+
+```mermaid
+flowchart TB
+    App["AppClassLoader<br/>加载 classpath 下的类"]
+    Platform["PlatformClassLoader<br/>JDK 9+ 加载 Java SE API"]
+    Bootstrap["BootstrapClassLoader<br/>C++ 实现, 加载核心类库"]
+
+    Request["loadClass(String name)"] --> Check1{"App 已加载?"}
+    Check1 -->|"否"| Delegate1["委派 Platform"]
+    Check1 -->|"是"| Return1["返回 Class"]
+
+    Delegate1 --> Check2{"Platform 已加载?"}
+    Check2 -->|"否"| Delegate2["委派 Bootstrap"]
+    Check2 -->|"是"| Return2["返回 Class"]
+
+    Delegate2 --> Check3{"Bootstrap 已加载?"}
+    Check3 -->|"否"| TryLoad["Bootstrap 尝试加载"]
+    Check3 -->|"是"| Return3["返回 Class"]
+
+    TryLoad --> Check4{"加载成功?"}
+    Check4 -->|"否"| Fallback["逐级下放自己加载"]
+    Check4 -->|"是"| Return4["返回 Class"]
+
+    Fallback --> App
+
+    style Bootstrap fill:#f96,stroke:#333
+    style Platform fill:#fc6,stroke:#333
+    style App fill:#6cf,stroke:#333
+```
+
+**核心源码（ClassLoader.loadClass）**：
+
+```java
+protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+    synchronized (getClassLoadingLock(name)) {
+        // 1. 检查是否已加载
+        Class<?> c = findLoadedClass(name);
+        if (c == null) {
+            try {
+                // 2. ★ 委派父加载器
+                if (parent != null) {
+                    c = parent.loadClass(name, false);
+                } else {
+                    c = findBootstrapClassOrNull(name);
+                }
+            } catch (ClassNotFoundException e) {
+                // 3. 父加载器加载失败 → 自己加载
+            }
+            if (c == null) {
+                // 4. ★ findClass 由子类实现
+                c = findClass(name);
+            }
+        }
+        if (resolve) resolveClass(c);
+        return c;
+    }
+}
+```
+
+**打破双亲委派**：Tomcat 的 `WebappClassLoader` 先自己加载（隔离不同应用的类），JDBC 用 `ThreadContextClassLoader` 加载 SPI 实现类。
+
+### 2.3 类加载时机
+
+JVM 规范规定**六种主动引用**会触发初始化：
+
+| 场景 | 代码示例 | 触发 |
+|------|----------|------|
+| new 对象 | `new User()` | ✅ |
+| 反射 | `Class.forName("User")` | ✅ |
+| 访问父类 static | 子类初始化 → 父类先初始化 | ✅ |
+| main 方法类 | 入口类直接初始化 | ✅ |
+| static 方法/字段 | `User.getName()` | ✅ |
+| default 方法 | 接口实现类初始化 → 接口初始化 | ✅ |
+
+**被动引用（不触发初始化）**：
+- `Parent.class` 不会初始化 Parent
+- `Parent.constant` 访问编译期常量不会初始化（常量已存入调用类的常量池）
+- 定义对象数组 `Parent[] arr = new Parent[10]` 不会初始化
+
+---
+
+## 3. 运行时数据区
+
+### 3.1 线程私有区域
+
+```mermaid
+flowchart TB
+    Thread["JVM 线程"] --> PC["程序计数器 PC<br/>当前执行字节码行号<br/>唯一无 OOM 的区域"]
+    Thread --> Stack["虚拟机栈 JVM Stack<br/>-Xss 设置大小<br/>StackOverflowError / OOM"]
+    Thread --> NativeStack["本地方法栈<br/>Native Method Stack"]
+    
+    Stack --> Frame1["栈帧 Frame 1<br/>main() 方法"]
+    Frame1 --> Frame2["栈帧 Frame 2<br/>methodA()"]
+    
+    Frame2 --> LV["局部变量表<br/>Local Variable Table<br/>存储基本类型/对象引用"]
+    Frame2 --> OS["操作数栈<br/>Operand Stack<br/>字节码指令操作区"]
+    Frame2 --> DL["动态链接<br/>Dynamic Linking<br/>符号引用→直接引用"]
+    Frame2 --> RA["方法返回地址<br/>Return Address"]
+```
+
+**栈帧的入栈与出栈**：
+
+```java
+public int add(int a, int b) {
+    return a + b;  // 对应字节码:
+    // iload_1    -- 将局部变量表[1] (a) 压入操作数栈
+    // iload_2    -- 将局部变量表[2] (b) 压入操作数栈
+    // iadd       -- 弹出两个 int, 相加, 结果压入栈顶
+    // ireturn    -- 返回栈顶值
+}
+```
+
+### 3.2 线程共享区域 — 堆 Heap
+
+```mermaid
+flowchart TB
+    HEAP["Java 堆 Heap<br/>-Xms 初始 -Xmx 最大"]
+    
+    HEAP --> YOUNG["新生代 Young Gen<br/>1/3 堆空间"]
+    HEAP --> OLD["老年代 Old Gen<br/>2/3 堆空间"]
+    
+    YOUNG --> EDEN["Eden 区<br/>8/10 新生代"]
+    YOUNG --> S0["Survivor 0<br/>1/10 新生代"]
+    YOUNG --> S1["Survivor 1<br/>1/10 新生代"]
+    
+    EDEN -->|"Minor GC<br/>存活对象"| S0
+    S0 -->|"Minor GC<br/>存活对象"| S1
+    S1 -->|"Minor GC<br/>年龄+1"| S0
+    S0 -->|"年龄 >= 15<br/>晋升"| OLD
+    S1 -->|"年龄 >= 15<br/>晋升"| OLD
+```
+
+**对象晋升老年代的四种情况**：
+
+| 情况 | 条件 | 参数 |
+|------|------|------|
+| 年龄达标 | 经历 Minor GC 存活次数 ≥ 15 | `-XX:MaxTenuringThreshold=15` |
+| 动态年龄判断 | Survivor 中同年龄对象总大小 > Survivor 的 50% | `-XX:TargetSurvivorRatio=50` |
+| 大对象直接进老年代 | 对象大小 > 阈值 | `-XX:PretenureSizeThreshold` |
+| 空间分配担保失败 | Minor GC 后 Survivor 放不下 | 直接进老年代 |
+
+### 3.3 元空间 Metaspace（方法区的 HotSpot 实现）
+
+```
+JDK 7 及以前: 永久代 PermGen（堆内, -XX:PermSize, -XX:MaxPermSize）
+JDK 8 及以后: 元空间 Metaspace（直接内存, -XX:MetaspaceSize, -XX:MaxMetaspaceSize）
+```
+
+**为什么移除永久代？**
+1. 永久代大小难确定（太小→OOM，太大→浪费）
+2. 永久代 GC 复杂（类卸载条件苛刻）
+3. 与 JRockit 合并后统一用 Metaspace
+
+```mermaid
+flowchart LR
+    subgraph JDK7["JDK 7-"]
+        P7["堆 Heap"] --> PG["永久代 PermGen<br/>类元数据 + 字符串常量池"]
+    end
+    
+    subgraph JDK8["JDK 8+"]
+        P8["堆 Heap"] --> P8Heap["字符串常量池移入堆"]
+        DM["直接内存 Direct Memory"] --> META["元空间 Metaspace<br/>类元数据"]
+    end
+    
+    JDK7 -.->|"移除永久代"| JDK8
+```
+
+### 3.4 运行时常量池 vs 字符串常量池
+
+| 维度 | 运行时常量池 | 字符串常量池 |
+|------|-------------|-------------|
+| 存储内容 | 类/方法/字段的符号引用 + 字面量 | 字符串字面量 + `intern()` 结果 |
+| 位置（JDK 8+） | Metaspace | Heap |
+| 是否有 OOM | 是 (`java.lang.OutOfMemoryError: Metaspace`) | 是 (`java.lang.OutOfMemoryError: Java heap space`) |
+| `String.intern()` | 不相关 | ✅ 将字符串放入池中 |
+
+---
+
+## 4. 对象创建与内存布局
+
+### 4.1 对象创建流程
+
+```mermaid
+sequenceDiagram
+    participant Code as new User()
+    participant JVM as JVM
+    participant Heap as Heap
+    participant TLAB as TLAB 线程本地分配缓冲
+
+    Code->>JVM: 1. 类加载检查
+    JVM->>JVM: 类是否已加载/链接/初始化?
+    
+    Note over JVM: 2. 分配内存
+    
+    alt 指针碰撞（Bump the Pointer）
+        JVM->>Heap: Serial/ParNew 用此方案<br/>已用内存和空闲内存间有指针
+    else 空闲列表（Free List）
+        JVM->>Heap: CMS 用此方案<br/>维护空闲内存列表
+    end
+    
+    JVM->>TLAB: 3. TLAB 分配(优先)<br/>-XX:UseTLAB(默认开启)
+    Note over TLAB: 每个线程在 Eden 有<br/>独占缓冲区,无锁分配
+    
+    JVM->>JVM: 4. 初始化零值
+    Note over JVM: 实例字段赋默认值<br/>int=0, boolean=false, 引用=null
+    
+    JVM->>JVM: 5. 设置对象头
+    Note over JVM: MarkWord(哈希码/GC年龄/锁)<br/>+ Klass Pointer(类元数据指针)
+    
+    JVM->>JVM: 6. 执行 init 方法
+    Note over JVM: 构造器 + 实例初始化块
+```
+
+### 4.2 对象内存布局
+
+```mermaid
+flowchart LR
+    subgraph Object["Java 对象"]
+        Header["对象头 Object Header<br/>Mark Word: 8 bytes<br/>Klass Pointer: 4 bytes(压缩)"]
+        Instance["实例数据 Instance Data<br/>所有字段<br/>按宽度对齐排序"]
+        Padding["对齐填充 Padding<br/>补齐到 8 的倍数"]
+    end
+```
+
+**Mark Word 的 5 种状态**（64 位 JVM）：
+
+| 锁状态 | 标志位 | 存储内容 |
+|--------|--------|----------|
+| 无锁 | 001 | hashCode(25) + age(4) + biased_lock(1) |
+| 偏向锁 | 101 | threadId(54) + epoch(2) + age(4) |
+| 轻量级锁 | 00 | 指向线程栈中 Lock Record 的指针 |
+| 重量级锁 | 10 | 指向 Monitor 对象的指针 |
+| GC 标记 | 11 | 空（GC 线程专用） |
+
+**压缩指针**：`-XX:+UseCompressedOops`（默认开启）。64 位 JVM 下，对象引用从 8 字节压缩为 4 字节。条件是堆 < 32GB。
+
+---
+
+## 5. 垃圾回收算法
+
+### 5.1 判断对象存活
+
+```mermaid
+flowchart LR
+    subgraph RC["引用计数法"]
+        R1["A 引用 B"] --> R2["B.refCount=1"]
+        R3["引用失效"] --> R4["refCount--"]
+        R5["refCount=0"] --> R6["回收"]
+    end
+    
+    subgraph ROOT["可达性分析 GC Roots"]
+        G1["栈帧中的引用"]
+        G2["static 引用"]
+        G3["JNI 引用"]
+        G4["同步监视器持有"]
+    end
+    
+    RC -.->|"JVM 不用<br/>循环引用问题"| ROOT
+```
+
+**GC Roots 包含**：
+1. 虚拟机栈中引用的对象
+2. 方法区 static 属性引用的对象
+3. 方法区常量池引用的对象
+4. Native 方法中引用的对象
+5. 被同步锁持有的对象
+
+### 5.2 四种引用级别
+
+```java
+// 强引用: 永不回收
+Object obj = new Object();
+
+// 软引用: 内存不足时回收（适合缓存）
+SoftReference<Object> soft = new SoftReference<>(new Object());
+
+// 弱引用: 下次 GC 一定回收（适合 WeakHashMap）
+WeakReference<Object> weak = new WeakReference<>(new Object());
+
+// 虚引用: 无法获取对象，仅用于回收通知
+PhantomReference<Object> phantom = new PhantomReference<>(new Object(), queue);
+```
+
+```mermaid
+flowchart TB
+    Strong["强引用<br/>Never GC"] --> Soft["软引用<br/>OOM 前 GC"]
+    Soft --> Weak["弱引用<br/>Next GC"]
+    Weak --> Phantom["虚引用<br/>GC 后通知"]
+    Phantom --> Dead["不可达<br/>真正死亡"]
+```
+
+### 5.3 三大基础 GC 算法
+
+| 算法 | 原理 | 优点 | 缺点 | JVM 使用位置 |
+|------|------|------|------|-------------|
+| **标记-清除** | 标记存活→清除未标记 | 简单 | 碎片化 | CMS 老年代 |
+| **标记-复制** | 存活对象复制到新空间→清空旧空间 | 无碎片，快 | 浪费一半空间 | 新生代 |
+| **标记-整理** | 标记存活→移到一端→清边界外 | 无碎片 | STW 长 | Serial/Parallel Old 老年代 |
+
+```mermaid
+flowchart LR
+    subgraph MS["标记-清除 Mark-Sweep"]
+        A1["A B C"] --> A2["标记 A B C 存活"]
+        A2 --> A3["清除未标记"]
+        A3 --> A4["A - C (碎片)"]
+    end
+    
+    subgraph MC["标记-复制 Mark-Copy"]
+        B1["A B C"] --> B2["A B C → 新空间"]
+        B2 --> B3["清空旧空间"]
+        B3 --> B4["A B C (连续)"]
+    end
+    
+    subgraph MCO["标记-整理 Mark-Compact"]
+        C1["A B C"] --> C2["标记存活"]
+        C2 --> C3["A B C → 一端"]
+        C3 --> C4["A B C (连续)"]
+    end
+```
+
+---
+
+## 6. 经典垃圾收集器
+
+```mermaid
+flowchart TB
+    subgraph YOUNG["新生代收集器"]
+        Serial["Serial<br/>单线程 STW"]
+        ParNew["ParNew<br/>多线程 STW"]
+        PS["Parallel Scavenge<br/>吞吐量优先"]
+    end
+    
+    subgraph OLD["老年代收集器"]
+        SO["Serial Old"]
+        PO["Parallel Old"]
+        CMS["CMS<br/>低延迟"]
+    end
+    
+    subgraph MIXED["混合收集器"]
+        G1["G1<br/>分区 Region"]
+        ZGC["ZGC<br/>超低延迟"]
+        Shenandoah["Shenandoah<br/>超低延迟"]
+    end
+    
+    Serial --> SO
+    ParNew --> CMS
+    PS --> PO
+    G1 --> G1
+    ZGC --> ZGC
+```
+
+### 6.1 Serial / Serial Old — 单线程
+
+```
+特点: 单线程, STW(Stop The World), 适合单核/小内存
+参数: -XX:+UseSerialGC
+新生代: 标记-复制
+老年代: 标记-整理
+```
+
+### 6.2 Parallel Scavenge / Parallel Old — 吞吐量优先
+
+```
+特点: 多线程 STW, 关注吞吐量(用户代码时间/总时间)
+参数: -XX:+UseParallelGC
+      -XX:MaxGCPauseMillis=200    目标最大停顿
+      -XX:GCTimeRatio=99          吞吐量目标 99%
+自适应: -XX:+UseAdaptiveSizePolicy 自动调新生代大小等
+```
+
+### 6.3 ParNew + CMS — 低延迟
+
+```mermaid
+sequenceDiagram
+    participant App as 应用线程
+    participant CMS as CMS 收集器
+
+    Note over App,CMS: 1. 初始标记 Initial Mark (STW)
+    App-->>CMS: 暂停
+    CMS->>CMS: 标记 GC Roots 直接关联对象
+    CMS-->>App: 恢复
+
+    Note over App,CMS: 2. 并发标记 Concurrent Mark
+    App->>App: 继续运行
+    CMS->>CMS: 从 GC Roots 遍历对象图
+
+    Note over App,CMS: 3. 重新标记 Remark (STW)
+    App-->>CMS: 暂停
+    CMS->>CMS: 修正并发期间变动的标记
+    CMS-->>App: 恢复
+
+    Note over App,CMS: 4. 并发清除 Concurrent Sweep
+    App->>App: 继续运行
+    CMS->>CMS: 清除未标记对象
+```
+
+**CMS 三大缺点**：
+1. **CPU 敏感**：并发阶段占用 CPU 线程
+2. **浮动垃圾**：并发清除期间的垃圾下次 GC 才收
+3. **碎片化**：标记-清除导致碎片→`Serial Old` 兜底
+
+---
+
+## 7. 低延迟收集器：G1 / ZGC / Shenandoah
+
+### 7.1 G1 分区模型
+
+```mermaid
+flowchart TB
+    HEAP["G1 堆 = N 个 Region (1MB~32MB)"]
+    
+    HEAP --> E["Eden Region"]
+    HEAP --> S["Survivor Region"]
+    HEAP --> O["Old Region"]
+    HEAP --> H["Humongous Region<br/>对象 >= 0.5 Region"]
+    
+    subgraph CYCLE["G1 混合回收周期"]
+        YGC["Young GC<br/>STW, 复制 Eden+Survivor"]
+        CONCURRENT["并发标记<br/>类似 CMS"]
+        MIXED["Mixed GC<br/>回收部分 Young + Old Region"]
+    end
+    
+    E --> YGC
+    O --> CONCURRENT
+    CONCURRENT --> MIXED
+```
+
+**G1 核心参数**：
+
+```bash
+-XX:+UseG1GC                     # 启用 G1
+-XX:MaxGCPauseMillis=200         # 目标最大停顿 200ms
+-XX:G1HeapRegionSize=4M          # Region 大小（1~32M，2 的幂）
+-XX:InitiatingHeapOccupancyPercent=45  # 堆占用 45% 触发并发标记
+-XX:G1NewSizePercent=5           # 新生代最小占比
+-XX:G1MaxNewSizePercent=60       # 新生代最大占比
+```
+
+### 7.2 ZGC — 亚毫秒级延迟
+
+```
+核心: 染色指针 Colored Pointers + 读屏障 Load Barrier
+目标: 任意堆大小, STW < 1ms
+参数: -XX:+UseZGC -Xmx16G
+
+染色指针: 64 位指针中 42 位存地址, 4 位存 GC 状态
+  [Remapped][Marked0][Marked1][Finalizable] | [42 bits addr] | [18 bits unused]
+```
+
+```mermaid
+sequenceDiagram
+    participant App as 应用线程
+    participant ZGC as ZGC
+
+    Note over App,ZGC: 1. 暂停标记开始 Pause Mark Start
+    App-->>ZGC: STW < 0.1ms
+    ZGC->>ZGC: 设置 GC Roots 标记
+
+    Note over App,ZGC: 2. 并发标记 Concurrent Mark
+    App->>App: 继续运行
+    ZGC->>ZGC: 遍历对象图 + 染色指针标记
+
+    Note over App,ZGC: 3. 暂停标记结束 Pause Mark End
+    App-->>ZGC: STW < 0.1ms
+
+    Note over App,ZGC: 4. 并发重定位 Concurrent Relocate
+    App->>App: 继续运行
+    ZGC->>ZGC: 移动对象 + 读屏障自愈
+```
+
+### 7.3 收集器对比总表
+
+| 收集器 | STW | 算法 | 适用堆 | 适用场景 |
+|--------|-----|------|--------|----------|
+| Serial | 长 | 标记-复制 | < 100M | 单核/小应用 |
+| Parallel | 长 | 标记-复制 | < 4G | 批处理/吞吐量优先 |
+| CMS | 中 | 标记-清除 | < 8G | Web 应用(JDK 8) |
+| **G1** | 可控 | 分区复制 | 4G~64G | ★ 默认(JDK 9+) |
+| **ZGC** | < 1ms | 染色指针 | 8M~16T | 超低延迟/大堆 |
+| Shenandoah | < 10ms | Brooks 指针 | 4G~64G | 低延迟 |
+
+---
+
+## 8. JIT 即时编译
+
+### 8.1 解释执行 vs 编译执行
+
+```mermaid
+flowchart TB
+    Bytecode["字节码 .class"] --> Interpreter["解释器<br/>逐条翻译执行"]
+    Bytecode --> Counter["方法调用计数器<br/>+ 回边计数器"]
+    
+    Counter -->|"热点代码<br/>方法调用 > 10000"| C1["C1 编译器 Client<br/>快速编译, 低优化"]
+    Counter -->|"热点代码<br/>C1后仍热点"| C2["C2 编译器 Server<br/>激进优化, 编译慢但运行快"]
+    
+    Interpreter --> Exec["执行"]
+    C1 --> CodeCache["CodeCache<br/>存放编译后的机器码"]
+    C2 --> CodeCache
+    CodeCache --> Exec
+```
+
+**热点探测方式**（HotSpot 用计数器）：
+- 方法调用计数器：方法被调用次数
+- 回边计数器：循环执行次数
+
+```
+分层编译（-XX:+TieredCompilation, JDK 8+ 默认）:
+  Level 0: 解释执行
+  Level 1: C1 无 profiling
+  Level 2: C1 带简单 profiling
+  Level 3: C1 带完整 profiling
+  Level 4: C2 激进优化
+```
+
+### 8.2 C2 激进优化技术
+
+| 优化 | 原理 | 示例 |
+|------|------|------|
+| **方法内联** | 小方法直接嵌入调用方 | `getX()` 替换为 `this.x` |
+| **逃逸分析** | 对象不逃逸→栈上分配/标量替换 | `new Point(1,2)` → `int x=1; int y=2` |
+| **锁消除** | 逃逸分析证明无竞争→干掉 `synchronized` | `StringBuffer.append()` 在局部变量中 |
+| **锁粗化** | 连续加锁→合并为一次 | 循环内的 `synchronized` 提到循环外 |
+| **空值检查消除** | 未抛 NPE→后续检查去掉 | `obj.method()` 第二次调用不检查 null |
+| **数组边界检查消除** | 循环范围安全→去掉 | `for(i=0;i<len;i++) arr[i]` 安全则去边界检查 |
+
+```java
+// 逃逸分析示例
+public int sum() {
+    Point p = new Point(1, 2);  // ★ 对象不逃逸方法
+    return p.x + p.y;
+    // JIT 优化后: return 1 + 2; (标量替换)
+    // 不会在堆上分配 Point 对象!
+}
+```
+
+---
+
+## 9. 类文件结构与字节码
+
+### 9.1 Class 文件结构
+
+```
+ClassFile {
+    u4             magic;               // CAFEBABE
+    u2             minor_version;
+    u2             major_version;       // 52 = JDK 8, 61 = JDK 17
+    u2             constant_pool_count;
+    cp_info        constant_pool[constant_pool_count-1];
+    u2             access_flags;        // public/abstract/final...
+    u2             this_class;
+    u2             super_class;
+    u2             interfaces_count;
+    u2             interfaces[interfaces_count];
+    u2             fields_count;
+    field_info     fields[fields_count];
+    u2             methods_count;
+    method_info    methods[methods_count];
+    u2             attributes_count;
+    attribute_info attributes[attributes_count];
+}
+```
+
+### 9.2 字节码指令分类
+
+```java
+// 源文件: Hello.java
+public class Hello {
+    public int add(int a, int b) {
+        return a + b;
+    }
+}
+
+// 编译: javac Hello.java
+// 反编译: javap -verbose Hello.class
+
+// add 方法字节码:
+//  0: iload_1       // 将第1个 int 参数压入操作数栈
+//  1: iload_2       // 将第2个 int 参数压入操作数栈
+//  2: iadd          // 弹出两个 int, 相加, 结果压栈
+//  3: ireturn       // 返回栈顶 int
+```
+
+| 类别 | 指令 | 含义 |
+|------|------|------|
+| 加载/存储 | `iload`, `istore`, `aload`, `astore` | 局部变量表 ↔ 操作数栈 |
+| 算术 | `iadd`, `isub`, `imul`, `idiv` | int 运算 |
+| 对象 | `new`, `getfield`, `putfield` | 创建/访问对象 |
+| 方法 | `invokevirtual`, `invokespecial`, `invokestatic`, `invokeinterface`, `invokedynamic` | 方法调用 |
+| 控制 | `ifeq`, `goto`, `tableswitch` | 分支跳转 |
+| 返回 | `ireturn`, `areturn`, `return` | 方法返回 |
+
+### 9.3 五种方法调用指令
+
+| 指令 | 调用目标 | 例子 |
+|------|----------|------|
+| `invokestatic` | 静态方法 | `Math.abs(x)` |
+| `invokespecial` | 构造器/私有方法/父类方法 | `new User()` / `super.method()` |
+| `invokevirtual` | 虚方法（多态） | `user.toString()` |
+| `invokeinterface` | 接口方法 | `list.size()` |
+| `invokedynamic` | 动态调用点 | Lambda 表达式 |
+
+---
+
+## 10. JVM 启动流程
+
+```mermaid
+sequenceDiagram
+    participant Shell as Shell
+    participant Java as java 命令
+    participant JVM as JVM (C++ 启动)
+    participant Main as Main 类
+
+    Shell->>Java: java -jar app.jar
+    Java->>Java: 解析参数, 找 jvm.cfg
+    Java->>JVM: 加载 jvm.dll / libjvm.so
+    JVM->>JVM: 1. CreateJVM() — 创建 JVM 实例
+    JVM->>JVM: 2. 初始化 JVM 参数
+    JVM->>JVM: 3. 创建 Bootstrap ClassLoader
+    JVM->>JVM: 4. LauncherHelper 加载 Main 类
+    JVM->>Main: 5. main() 执行
+    Main-->>JVM: 返回
+    JVM->>JVM: 6. DestroyJVM() — 销毁 JVM
+```
+
+---
+
+## 11. JVM 调优实战
+
+### 11.1 核心监控工具
+
+```bash
+# 1. 查看 JVM 进程
+jps -l
+
+# 2. 查看 GC 情况（最常用）
+jstat -gcutil <pid> 1000          # 每秒输出 GC 统计
+jstat -gc <pid> 1000              # 详细 GC 数据
+
+# 3. 查看线程
+jstack <pid>                      # 线程快照, 排查死锁/CPU 高
+
+# 4. 查看堆
+jmap -heap <pid>                  # 堆配置 + 使用情况
+jmap -histo:live <pid>            # 存活对象直方图
+jmap -dump:format=b,file=heap.hprof <pid>  # 堆转储
+
+# 5. 查看 JIT 编译
+jstat -compiler <pid>
+
+# 6. 在线诊断(JDK 9+)
+jhsdb jmap --heap --pid <pid>
+```
+
+### 11.2 GC 日志分析（JDK 8 vs 9+）
+
+```bash
+# JDK 8 GC 日志
+-XX:+PrintGCDetails -XX:+PrintGCDateStamps -Xloggc:gc.log
+
+# JDK 9+ 统一日志
+-Xlog:gc*=info:file=gc.log:time,level,tags
+
+# 解读 GC 日志:
+# [GC (Allocation Failure) [PSYoungGen: 65536K->10240K(76288K)]
+#  65536K->20480K(251392K), 0.0034567 secs]
+#  含义: 新生代 65M→10M, 总堆 65M→20M, 耗时 3.5ms
+```
+
+### 11.3 调优核心原则
+
+```mermaid
+flowchart TD
+    Start["开始调优"] --> Measure["测量: jstat / GC 日志"]
+    Measure --> Analyze{"分析瓶颈"}
+    
+    Analyze -->|"Minor GC 频繁"| Minor["增大新生代<br/>-Xmn / -XX:NewRatio"]
+    Analyze -->|"Full GC 频繁"| Full["分析 Full GC 原因<br/>jmap -histo 看大对象"]
+    Analyze -->|"STW 过长"| Pause["换收集器<br/>CMS → G1 → ZGC"]
+    Analyze -->|"OOM"| OOM["堆转储 + MAT 分析<br/>查内存泄漏"]
+    
+    Minor --> Test["测试验证"]
+    Full --> Test
+    Pause --> Test
+    OOM --> Test
+    Test -->|"达标"| Done["完成"]
+    Test -->|"不达标"| Measure
+```
+
+### 11.4 常用 JVM 参数速查
+
+| 分类 | 参数 | 含义 |
+|------|------|------|
+| **堆** | `-Xms2G -Xmx2G` | 初始/最大堆 = 2G |
+| **新生代** | `-Xmn1G` 或 `-XX:NewRatio=2` | 新生代 1G 或 老:新 = 2:1 |
+| **元空间** | `-XX:MetaspaceSize=256M -XX:MaxMetaspaceSize=512M` | 元空间 |
+| **栈** | `-Xss1M` | 线程栈大小 |
+| **收集器** | `-XX:+UseG1GC` | G1 |
+| **GC 日志** | `-Xlog:gc*:file=gc.log` | JDK 9+ GC 日志 |
+| **OOM dump** | `-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dump/` | OOM 时自动 dump |
+| **压缩指针** | `-XX:+UseCompressedOops` | 默认开启 |
+| **分层编译** | `-XX:+TieredCompilation` | 默认开启 |
+
+### 11.5 生产环境推荐配置
+
+```bash
+# 通用 Web 应用 (4核8G)
+java -Xms4G -Xmx4G \
+     -XX:+UseG1GC \
+     -XX:MaxGCPauseMillis=200 \
+     -XX:+HeapDumpOnOutOfMemoryError \
+     -XX:HeapDumpPath=/var/log/dump/ \
+     -Xlog:gc*:file=/var/log/gc.log:time,level,tags \
+     -jar app.jar
+
+# 大堆/低延迟 (>16G)
+java -Xms16G -Xmx16G \
+     -XX:+UseZGC \
+     -XX:+ZGenerational \
+     -XX:+HeapDumpOnOutOfMemoryError \
+     -jar app.jar
+```
+
+---
+
+## 12. 常见 OOM 与排查
+
+| OOM 类型 | 原因 | 排查工具 | 典型场景 |
+|----------|------|----------|----------|
+| `Java heap space` | 堆内存不够 | `jmap -histo` + MAT | 大对象/内存泄漏 |
+| `GC overhead limit exceeded` | GC 效率太低（98%时间在 GC） | GC 日志 | 堆太小/内存泄漏 |
+| `Metaspace` | 加载类太多 | `jstat -class` | 动态生成类过多 |
+| `unable to create new native thread` | 线程数超限 | `jstack` / `ulimit -u` | 线程池无界 |
+| `Direct buffer memory` | 直接内存不够 | `jmap -dump` + MAT | NIO 泄漏 |
+
+**MAT (Memory Analyzer Tool) 排查步骤**：
+
+```bash
+# 1. 生成堆转储
+jmap -dump:format=b,file=heap.hprof <pid>
+
+# 2. 用 MAT 打开 heap.hprof
+# 3. Leak Suspects Report → 查看嫌疑泄漏对象
+# 4. Dominator Tree → 看谁持有了最多内存
+# 5. Path to GC Roots → 追踪引用链
+```
+
+```java
+// 内存泄漏的典型代码模式
+public class LeakyCache {
+    // ❌ Map 的 key 不断增加, 永不清理
+    private static final Map<String, Object> cache = new HashMap<>();
+    
+    public void put(String key, Object value) {
+        cache.put(key, value);  // 只有 put, 没有 remove!
+    }
+}
+
+// ✅ 修复: 使用 WeakHashMap 或 Guava Cache
+private static final Map<String, Object> cache = new WeakHashMap<>();
+```
+
+---
+
+*全文 12 章，基于 HotSpot JVM (JDK 8/11/17/21) 编写。*
