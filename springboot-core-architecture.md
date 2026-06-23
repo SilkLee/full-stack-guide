@@ -1074,62 +1074,62 @@ sequenceDiagram
     participant Cache as DefaultSingletonBeanRegistry
     participant Create as AbstractAutowireCapableBeanFactory
     participant CI as InstantiationStrategy
-    
-    User->>BF: "getBean(\"userService\")"
-    BF->>BF: "doGetBean()"
-    
-    Note over BF: "1. 转换 beanName<br/>(去除 & 前缀, 解析别名)"
-    BF->>BF: "transformedBeanName()"
-    
-    Note over BF: "2. 尝试从缓存获取"
-    BF->>Cache: "getSingleton(beanName)"
-    Cache->>Cache: "检查 singletonObjects (L1)"
-    alt "L1 命中"
-        Cache-->>BF: "返回已创建的单例 Bean"
-        BF-->>User: "Bean 实例"
-    else "L1 未命中"
-        Note over Cache: "检查 earlySingletonObjects (L2)"
-        Note over Cache: "检查 singletonFactories (L3)"
-        Cache-->>BF: "null (未创建)"
-        
-        Note over BF: "3. 检查是否存在 BeanDefinition"
-        BF->>BF: "getMergedLocalBeanDefinition(beanName)"
-        
-        Note over BF: "4. 检查依赖关系 @DependsOn"
-        BF->>BF: "递归创建依赖的 Bean"
-        
-        Note over BF: "5. 按 scope 创建"
-        
-        alt "singleton"
-            BF->>Cache: "getSingleton(beanName, ObjectFactory)"
-            Cache->>Create: "createBean(beanName, mbd, args)"
-            Create->>Create: "doCreateBean()"
-            
-            Note over Create: "5.1 创建实例"
-            Create->>CI: "instantiateBean() → 反射/CGLIB"
-            
-            Note over Create: "5.2 合并 BeanDefinition"
-            Create->>Create: "applyMergedBeanDefinitionPostProcessors()"
-            
-            Note over Create: "5.3 ★提前暴露引用(解决循环依赖)"
-            Create->>Cache: "addSingletonFactory(beanName, () → getEarlyBeanReference())"
-            Note over Cache: "放入 L3 缓存"
-            
-            Note over Create: "5.4 属性填充"
-            Create->>Create: "populateBean() → @Autowired 注入"
-            
-            Note over Create: "5.5 初始化"
-            Create->>Create: "initializeBean()"
-            Note over Create: "Aware 回调 → BeanPostProcessor.before → init → BeanPostProcessor.after"
-            
-            Create-->>Cache: "Bean 实例"
-            Cache->>Cache: "addSingleton() → 放入 L1, 移除 L2/L3"
-            Cache-->>BF: "Bean 实例"
-        else "prototype"
-            BF->>Create: "createBean() (每次新建)"
+
+    User->>BF: getBean "userService"
+    BF->>BF: doGetBean
+
+    Note over BF: 1. 转换 beanName(去除 & 前缀, 解析别名)
+    BF->>BF: transformedBeanName
+
+    Note over BF: 2. 尝试从缓存获取
+    BF->>Cache: getSingleton beanName
+    Cache->>Cache: 检查 singletonObjects (L1)
+    alt L1 命中
+        Cache-->>BF: 返回已创建的单例 Bean
+        BF-->>User: Bean 实例
+    else L1 未命中
+        Note over Cache: 检查 earlySingletonObjects (L2)
+        Note over Cache: 检查 singletonFactories (L3)
+        Cache-->>BF: null (未创建)
+
+        Note over BF: 3. 检查是否存在 BeanDefinition
+        BF->>BF: getMergedLocalBeanDefinition beanName
+
+        Note over BF: 4. 检查依赖关系 @DependsOn
+        BF->>BF: 递归创建依赖的 Bean
+
+        Note over BF: 5. 按 scope 创建
+
+        alt singleton
+            BF->>Cache: getSingleton beanName, ObjectFactory
+            Cache->>Create: createBean (beanName, mbd, args)
+            Create->>Create: doCreateBean
+
+            Note over Create: 5.1 创建实例
+            Create->>CI: instantiateBean → 反射/CGLIB
+
+            Note over Create: 5.2 合并 BeanDefinition
+            Create->>Create: applyMergedBeanDefinitionPostProcessors
+
+            Note over Create: 5.3 ★提前暴露引用(解决循环依赖)
+            Create->>Cache: addSingletonFactory beanName
+            Note over Cache: ObjectFactory → 放入 L3 缓存
+
+            Note over Create: 5.4 属性填充
+            Create->>Create: populateBean → @Autowired 注入
+
+            Note over Create: 5.5 初始化
+            Create->>Create: initializeBean
+            Note over Create: Aware → BP.before → init → BP.after
+
+            Create-->>Cache: Bean 实例
+            Cache->>Cache: addSingleton → 放入 L1, 移除 L2/L3
+            Cache-->>BF: Bean 实例
+        else prototype
+            BF->>Create: createBean 每次新建
         end
-        
-        BF-->>User: "Bean 实例"
+
+        BF-->>User: Bean 实例
     end
 ```
 
