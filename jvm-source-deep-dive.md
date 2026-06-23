@@ -18,6 +18,12 @@
 - [10. JVM 启动流程](#10-jvm-启动流程)
 - [11. JVM 调优实战](#11-jvm-调优实战)
 - [12. 常见 OOM 与排查](#12-常见-oom-与排查)
+- [13. Java 内存模型 JMM](#13-java-内存模型-jmm)
+- [14. synchronized 锁升级](#14-synchronized-锁升级)
+- [15. SafePoint 安全点](#15-safepoint-安全点)
+- [16. JFR 与诊断](#16-jfr-与诊断)
+- [17. 虚拟线程](#17-虚拟线程)
+- [18. 附录：高级参数速查](#18-附录高级参数速查)
 
 ---
 
@@ -855,4 +861,395 @@ private static final Map<String, Object> cache = new WeakHashMap<>();
 
 ---
 
-*全文 12 章，基于 HotSpot JVM (JDK 8/11/17/21) 编写。*
+*全文 18 章，基于 HotSpot JVM (JDK 8/11/17/21) 编写。*
+
+---
+
+## 13. Java 内存模型 JMM
+
+JMM（Java Memory Model）不是 JVM 内存结构，而是**多线程环境下的内存可见性规范**。
+
+### 13.1 CPU 缓存一致性问题
+
+```mermaid
+flowchart TB
+    CPU1["CPU Core 1<br/>Thread 1"] --> Cache1["L1/L2 Cache"]
+    CPU2["CPU Core 2<br/>Thread 2"] --> Cache2["L1/L2 Cache"]
+    
+    Cache1 --> Bus["总线 Bus + 缓存一致性协议 MESI"]
+    Cache2 --> Bus
+    Bus --> RAM["主内存 Main Memory<br/>x = 0"]
+    
+    Thread1["Thread1: x = 1"] --> Cache1
+    Thread2["Thread2: print x"] --> Cache2
+    Note1["问题: Thread2 可能读到 0<br/>因为 Cache2 中的 x 未失效"]
+```
+
+### 13.2 volatile 的三大特性
+
+```java
+// volatile 保证:
+// 1. 可见性: 写 volatile → 立即刷新到主内存
+// 2. 有序性: 禁止指令重排（内存屏障）
+// 3. ★ 不保证原子性: volatile int count = 0; count++ 仍非原子
+
+class VolatileExample {
+    private volatile boolean flag = false;
+    private int data = 0;
+    
+    // Thread 1: 写
+    public void writer() {
+        data = 42;        // 1. 写普通变量
+        flag = true;      // 2. 写 volatile → ★ StoreStore 屏障
+        // 保证: flag=true 可见时, data=42 一定可见
+    }
+    
+    // Thread 2: 读
+    public void reader() {
+        if (flag) {       // ★ LoadLoad 屏障
+            System.out.println(data);  // 一定看到 42
+        }
+    }
+}
+```
+
+**volatile 底层实现**：
+
+```asm
+# volatile 写对应的汇编（x86）
+mov [flag], 1        # 写入
+lock addl $0, (%rsp)  # ★ lock 前缀指令 → StoreLoad 屏障
+                      # 作用: 清空 StoreBuffer + 使其他 CPU 的 CacheLine 失效
+```
+
+### 13.3 happens-before 规则
+
+| 规则 | 含义 | 示例 |
+|------|------|------|
+| **程序顺序规则** | 同一线程内，前面的操作 happens-before 后面 | `x=1; y=2;` → `happens-before` |
+| **volatile 规则** | volatile 写 happens-before 后续 volatile 读 | `writer()` → `happens-before` → `reader()` |
+| **锁规则** | unlock happens-before 后续 lock | `synchronized` 释放 → 获取 |
+| **传递性** | A → B, B → C ⇒ A → C | — |
+| **线程启动规则** | `start()` happens-before 线程内所有操作 | `t.start()` → `t.run()` |
+| **线程终止规则** | 线程内操作 happens-before `join()` 返回 | `t.run()` → `t.join()` |
+
+### 13.4 CAS 与原子操作
+
+```java
+// CAS: Compare And Swap — 无锁原子操作
+// 底层: lock cmpxchg 指令（x86）
+
+public class AtomicInteger {
+    private volatile int value;  // ★ volatile 保证可见性
+    
+    public final int incrementAndGet() {
+        // ★ 自旋 + CAS
+        for (;;) {
+            int current = get();
+            int next = current + 1;
+            if (compareAndSet(current, next))  // CAS
+                return next;
+        }
+    }
+    
+    // Unsafe.compareAndSwapInt → JNI → lock cmpxchg
+}
+```
+
+---
+
+## 14. synchronized 锁升级
+
+synchronized 在 HotSpot 中经历了**无锁 → 偏向锁 → 轻量级锁 → 重量级锁**的四级演化。
+
+### 14.1 锁升级流程图
+
+```mermaid
+flowchart TD
+    START["synchronized(obj)"] --> CHECK1{"偏向锁是否开启?<br/>-XX:+UseBiasedLocking"}
+    
+    CHECK1 -->|"是"| BIAS["偏向锁 Biased Locking<br/>MarkWord 记录线程 ID<br/>★ CAS 设置线程 ID"]
+    CHECK1 -->|"否"| LIGHT
+    
+    BIAS --> BIAS_CHECK{"同一线程重入?"}
+    BIAS_CHECK -->|"是"| BIAS_ENTER["直接进入（零开销）"]
+    BIAS_CHECK -->|"否"| REVOKE["撤销偏向锁<br/>→ SafePoint 暂停原线程"]
+    
+    REVOKE --> LIGHT["轻量级锁 Lightweight Lock<br/>CAS 将 MarkWord 替换为<br/>指向 Lock Record 的指针"]
+    
+    LIGHT --> LIGHT_CHECK{"CAS 成功?"}
+    LIGHT_CHECK -->|"是"| LIGHT_ENTER["获取锁成功"]
+    LIGHT_CHECK -->|"否<br/>(竞争)"| SPIN["自旋等待 Spin<br/>自适应自旋次数"]
+    
+    SPIN --> SPIN_CHECK{"自旋成功?"}
+    SPIN_CHECK -->|"是"| LIGHT_ENTER
+    SPIN_CHECK -->|"否<br/>(自旋超时)"| HEAVY["重量级锁 Heavyweight Lock<br/>monitorenter → OS 互斥量<br/>★ 线程阻塞/唤醒"]
+    
+    HEAVY --> HEAVY_ENTER["进入阻塞队列<br/>等待唤醒"]
+```
+
+### 14.2 四种锁状态对比
+
+| 锁状态 | MarkWord 标志 | 适用场景 | 开销 | JDK 15+ |
+|--------|--------------|----------|------|---------|
+| 无锁 | 001 | 初始状态 | 零 | — |
+| **偏向锁** | 101 | 单线程反复获取 | 极低（CAS 一次） | **默认禁用** |
+| **轻量级锁** | 00 | 多线程交替执行（无竞争） | 低（CAS + 自旋） | — |
+| **重量级锁** | 10 | 多线程并发竞争 | 高（系统调用） | — |
+
+```bash
+# JDK 15+ 偏向锁默认禁用（Renaissance 基准测试发现现代应用收益小）
+-XX:+UseBiasedLocking    # 手动开启
+```
+
+### 14.3 synchronized 底层实现
+
+```bytecode
+// Java 源码
+public synchronized void method() {
+    // 方法体
+}
+
+// 对应字节码:
+//  方法标志: ACC_SYNCHRONIZED
+//  自动在方法入口 monitorenter, 出口 monitorexit
+
+// 同步块:
+synchronized(obj) { ... }
+
+// 字节码:
+//   aload_1
+//   dup
+//   astore_2
+//   monitorenter    ← ★ 进入 Monitor
+//   ... 代码 ...
+//   aload_2
+//   monitorexit     ← ★ 正常退出
+//   goto end
+//   aload_2
+//   monitorexit     ← ★ 异常退出（finally）
+// end:
+```
+
+---
+
+## 15. SafePoint 安全点
+
+SafePoint 是 JVM **暂停所有用户线程以执行 GC 的位置**。不是任何位置都能 GC——只有线程到达 SafePoint 时才能暂停。
+
+### 15.1 SafePoint 的本质
+
+```mermaid
+sequenceDiagram
+    participant GC as GC 线程
+    participant T1 as 用户线程 1
+    participant T2 as 用户线程 2
+
+    GC->>GC: 需要 GC, 设置全局标志
+    GC->>T1: 等待 Thread 1 到达 SafePoint
+    GC->>T2: 等待 Thread 2 到达 SafePoint
+
+    Note over T1: 执行中... 检查标志位
+    T1->>T1: 到达 SafePoint → 暂停
+    T1-->>GC: 已暂停
+
+    Note over T2: 执行中... 检查标志位
+    T2->>T2: 到达 SafePoint → 暂停
+    T2-->>GC: 已暂停
+
+    Note over GC: ★ 所有线程到达 → STW
+    GC->>GC: 执行 GC
+    GC->>T1: 恢复线程
+    GC->>T2: 恢复线程
+```
+
+### 15.2 SafePoint 位置
+
+JIT 在编译代码时，**在以下位置插入 SafePoint 检查**：
+
+| 位置 | 示例 |
+|------|------|
+| 方法返回前 | `return` 之前 |
+| 循环回边 | `for` / `while` 的末尾 |
+| 异常抛出点 | `athrow` 之前 |
+
+```java
+// JIT 编译后插入 SafePoint 检查的伪代码:
+for (int i = 0; i < 1000000; i++) {
+    // 用户代码
+    if (i % 100 == 0) {
+        // ★ JIT 插入的 SafePoint 检查
+        if (global_flag_set) { read_polling_page(); }
+    }
+}
+// 问题: 大循环内如果没有 SafePoint → "TTSP 问题"
+// (Time To SafePoint) → STW 延迟飙升
+```
+
+### 15.3 Counted Loop 和 SafePoint 的坑
+
+```java
+// ❌ 这个循环没有 SafePoint!
+for (long i = 0; i < Long.MAX_VALUE; i++) {
+    // 空循环, JIT 将其优化为 counted loop
+    // JIT 认为执行时间短, 不插入 SafePoint 检查
+    // → GC 必须等待此循环跑完 → STW 巨长!
+}
+
+// ✅ 修复:
+for (long i = 0; i < Long.MAX_VALUE; i++) {
+    Thread.yield();  // 或任何方法调用 → 产生 SafePoint
+}
+```
+
+---
+
+## 16. JFR 与诊断
+
+JFR（Java Flight Recorder）是 JDK 内置的**低开销性能监控框架**（< 1% 性能影响）。
+
+### 16.1 JFR 核心事件类型
+
+```bash
+# 启动 JFR 记录（JDK 9+）
+java -XX:StartFlightRecording=duration=60s,filename=recording.jfr -jar app.jar
+
+# 运行时控制
+jcmd <pid> JFR.start duration=60s filename=myrecording.jfr
+jcmd <pid> JFR.dump filename=myrecording.jfr
+jcmd <pid> JFR.stop
+
+# 查看 JFR 文件
+jfr print --events GC,CPULoad recording.jfr  # 命令行查看
+# 或: JDK Mission Control (JMC) 图形界面打开
+```
+
+| 事件类别 | 包含内容 |
+|----------|----------|
+| **GC** | 每次 GC 的持续时间、回收量、原因 |
+| **Compilation** | JIT 编译耗时、CodeCache 使用 |
+| **Thread** | 线程阻塞时间、锁等待、上下文切换 |
+| **File I/O** | 文件读写耗时、路径、大小 |
+| **Socket I/O** | 网络读写耗时、地址、数据量 |
+| **Exception** | 异常类型、抛出次数 |
+| **Allocation** | 对象分配的类、大小、线程 |
+
+### 16.2 hs_err 崩溃日志解读
+
+```bash
+# JVM 崩溃时自动生成 hs_err_pid.log
+# 关键信息:
+
+# 1. 崩溃原因
+# Internal Error (safepoint.cpp:333), pid=12345, tid=12346
+# guarantee(result) failed: result must be true
+
+# 2. 当前线程
+# Current thread (0x00007f...): JavaThread "main" [_thread_in_native, id=12346]
+
+# 3. 堆信息
+# Heap:
+#  PSYoungGen      total 76288K, used 10240K
+#  ParOldGen       total 175104K, used 0K
+
+# 4. Native 内存
+# Native Memory Tracking:
+#   Total: reserved=5G, committed=3G
+```
+
+---
+
+## 17. 虚拟线程
+
+JDK 21 正式引入**虚拟线程**（Project Loom），一个 JVM 可创建**百万级**虚拟线程。
+
+### 17.1 平台线程 vs 虚拟线程
+
+```mermaid
+flowchart TB
+    subgraph PLATFORM["平台线程 Platform Thread"]
+        P1["线程 1"] --> OS1["OS 线程 1"]
+        P2["线程 2"] --> OS2["OS 线程 2"]
+        P3["线程 3"] --> OS3["OS 线程 3"]
+        NoteP["1:1 映射<br/>每个 Java 线程 = 一个 OS 线程<br/>默认栈 1MB"]
+    end
+
+    subgraph VIRTUAL["虚拟线程 Virtual Thread"]
+        V1["虚拟线程 1"]
+        V2["虚拟线程 2"]
+        V3["虚拟线程 3"]
+        V9999["... 10000 个虚拟线程"]
+        
+        Carrier1["平台线程 A<br/>(Carrier Thread)"]
+        Carrier2["平台线程 B<br/>(Carrier Thread)"]
+        
+        V1 --> Carrier1
+        V2 --> Carrier1
+        V3 --> Carrier2
+        V9999 --> Carrier2
+        
+        Carrier1 --> OS_A["OS 线程"]
+        Carrier2 --> OS_B["OS 线程"]
+        
+        NoteV["M:N 映射<br/>虚拟线程在阻塞时自动"卸下"<br/>让 Carrier 线程处理其他虚拟线程<br/>默认栈: 按需动态增长"]
+    end
+```
+
+### 17.2 虚拟线程使用
+
+```java
+// 方式 1: Thread.ofVirtual()
+Thread vThread = Thread.ofVirtual()
+    .name("my-virtual-thread")
+    .start(() -> {
+        System.out.println("Hello from virtual thread");
+    });
+vThread.join();
+
+// 方式 2: Executors.newVirtualThreadPerTaskExecutor()
+try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    for (int i = 0; i < 1_000_000; i++) {
+        executor.submit(() -> {
+            Thread.sleep(1000);  // ★ 阻塞时自动卸载
+            return "done";
+        });
+    }
+}  // 100 万个虚拟线程!
+
+// Spring Boot 3.2+ 启用虚拟线程:
+// spring.threads.virtual.enabled=true
+```
+
+### 17.3 虚拟线程 vs 线程池
+
+| 维度 | 线程池 | 虚拟线程 |
+|------|--------|----------|
+| 创建成本 | 高（~1MB 栈 + OS 资源） | 低（对象头 + 动态栈） |
+| 阻塞代价 | 线程阻塞 → 无法复用 | 自动卸载 → Carrier 继续工作 |
+| 最大数量 | 数千 | **百万级** |
+| 适用场景 | CPU 密集型 | **I/O 密集型** |
+| 编程模型 | `CompletableFuture` / 响应式 | **同步代码**（像写同步代码一样写异步） |
+
+---
+
+## 18. 附录：高级参数速查
+
+| 分类 | 参数 | 含义 |
+|------|------|------|
+| **JFR** | `-XX:StartFlightRecording=filename=rec.jfr` | 启动时开始记录 |
+| **CDS** | `-XX:ArchiveClassesAtExit=app-cds.jsa` | 运行时生成 CDS 归档 |
+| **CDS** | `-XX:SharedArchiveFile=app-cds.jsa` | 使用 CDS 归档 |
+| **NMT** | `-XX:NativeMemoryTracking=summary` | 开启 Native 内存追踪 |
+| **NMT** | `jcmd <pid> VM.native_memory summary` | 查看 Native 内存 |
+| **调试** | `-XX:+PrintFlagsFinal` | 打印所有 JVM 参数终值 |
+| **调试** | `-XX:+UnlockDiagnosticVMOptions` | 解锁诊断参数 |
+| **逃逸分析** | `-XX:+DoEscapeAnalysis` | 默认开启 |
+| **去优化** | `-XX:+TraceDeoptimization` | 追踪去优化事件 |
+| **字符串去重** | `-XX:+UseStringDeduplication` | G1 下字符串去重 |
+| **NUMA** | `-XX:+UseNUMA` | NUMA 感知分配 |
+| **容器** | `-XX:+UseContainerSupport` | Docker 下自动感知内存限制 |
+| **大页** | `-XX:+UseLargePages` | 启用大页内存 |
+
+---
+
+*全文 18 章，基于 HotSpot JVM (JDK 8/11/17/21) 编写。*
