@@ -2549,79 +2549,112 @@ public abstract class CacheAspectSupport {
 
 ## 24. 设计哲学与架构意图
 
-理解 Spring 的设计 WHY，比记住源码 HOW 更重要。
+> **核心论点：Spring 的每一个设计决策，都是在**权衡**。本节逐一拆解每个"为什么"背后的推演过程。**
 
 ### 24.1 为什么 refresh() 分 12 步而不是 3 步？
 
+**表面看**：12 步很啰嗦，为什么不用 3 步（准备 → 加载 → 完成）？
+
+**Rod Johnson（Spring 创始人）的抉择**：`refresh()` 是 Spring 容器的"心脏"，每一步都是一个**可控断点**。如果把 12 步压缩成 3 步，每一步内部的逻辑太厚，子类想干预也无从下手。
+
+```mermaid
+flowchart TD
+    subgraph BAD["如果只有 3 步"]
+        B1["prepareRefresh - 混入校验 + 事件 + 状态"]
+        B2["loadBeans - 混入注册 + 处理 + 代理"]
+        B3["finishRefresh - 混入 WebServer + Listeners + 清理"]
+    end
+    
+    subgraph GOOD["12 步：每步单一职责"]
+        G1["prepareRefresh() - 仅设置状态"]
+        G2["obtainFreshBeanFactory() - 仅获取工厂"]
+        G3["prepareBeanFactory() - 仅注册基础组件"]
+        G4["postProcessBeanFactory() - ★子类扩展点"]
+        G5["invokeBeanFactoryPostProcessors() - ★插件扩展点"]
+        G6["registerBeanPostProcessors() - 仅注册拦截器"]
+        G7["initMessageSource() - 仅国际化"]
+        G8["initApplicationEventMulticaster() - 仅事件"]
+        G9["onRefresh() - ★子类扩展点"]
+        G10["registerListeners() - 仅注册监听"]
+        G11["finishBeanFactoryInitialization() - 仅实例化"]
+        G12["finishRefresh() - 仅清理 + 事件"]
+    end
+    
+    BAD -.->|"重构"| GOOD
+```
+
+**为什么每一步都是 protected 方法而不是 private？** — 模板方法模式的核心：子类可以选择性地覆盖某一步。例如：
+- `AbstractRefreshableApplicationContext` 覆盖第 2 步，使 Factory 可被重建（支持多次 refresh）
+- `ServletWebServerApplicationContext` 覆盖第 9 步，创建内嵌 WebServer
+- `ReactiveWebServerApplicationContext` 同样覆盖第 9 步，但创建的是 Reactive WebServer
+
+> **教学要点**：如果你设计的框架有 10 个可变步骤，别写成一个 500 行的 `run()` 方法。拆成 10 个 protected 方法，子类按需覆盖。这就是"对扩展开放，对修改封闭"的具体实践。
+
+### 24.2 为什么用三级缓存解决循环依赖，而不是二级/一级？
+
+这个问题几乎所有面试都会问，但 90% 的人只能回答"三级缓存分别存什么"，说不出**为什么是三级**。
+
+**推演过程：如果你是 Rod Johnson，一步步设计缓存的演进**
+
+```
+v1.0: 一级缓存（Map<String, Object>）
+  问题：正在创建中的 Bean（半成品）和已完成 Bean 混在一起。
+  后果：B 拿到半成品的 A，调用其未注入的方法 → NPE ❌
+
+v2.0: 二级缓存（completed + early）
+  L1 = 完成 Bean, L2 = 半成品 Bean
+  问题：如果 A 需要 AOP 代理，L2 存的是原始对象。
+  当 B 调用 A 的方法时，AOP 未生效（事务/缓存/日志都不触发）❌
+
+v3.0: 三级缓存（completed + early + factory）
+  L1 = 完成 Bean, L2 = 半成品引用, L3 = ObjectFactory lambda
+  关键：L3 不是存对象，而是存"如何生成对象"的函数。
+  当 B 需要 A 时 → 调用 factory.getObject() → 
+  ★ 如果 A 需要 AOP，这时才创建代理 → B 拿到代理对象 ✅
+```
+
 ```mermaid
 flowchart LR
-    subgraph WHY["设计意图"]
-        W1["步骤解耦<br/>每个步骤可独立扩展"]
-        W2["失败隔离<br/>某步失败可精准回滚"]
-        W3["模板方法模式<br/>子类可覆盖特定步骤"]
+    subgraph V1["一级缓存"]
+        C1["Map: beanName → Bean"]
     end
+    subgraph V2["二级缓存"]
+        C2a["L1: 完成 Bean"]
+        C2b["L2: 半成品 Bean"]
+    end
+    subgraph V3["三级缓存 ★"]
+        C3a["L1: 完成 Bean"]
+        C3b["L2: 早期引用"]
+        C3c["L3: ObjectFactory lambda<br/>延迟执行！"]
+    end
+    V1 -->|"无法区分半成品"| V2
+    V2 -->|"无法延迟创建代理"| V3
 ```
 
-Spring 采用**模板方法模式**，`refresh()` 每一步都是一个钩子方法：
+**ObjectFactory 的精妙之处**：它本质上是一个 **"懒加载工厂"**。如果没有循环依赖，L3 里的 lambda 永远不会被调用（getObject() 永远不会触发），AOP 代理在正常初始化流程中创建。只有当循环依赖发生时，才被迫提前执行 lambda，生成早期引用。
 
-| 步骤 | 可覆盖性 | 典型扩展 |
-|------|----------|----------|
-| `prepareRefresh()` | 子类覆盖 | 校验必需属性 |
-| `obtainFreshBeanFactory()` | 框架锁定 | `AbstractRefreshableApplicationContext` 覆盖此步以支持 refresh 重建 |
-| `postProcessBeanFactory()` | **子类必覆盖** | `ServletWebServerApplicationContext` 在此注册 `WebServerFactory` |
-| `invokeBeanFactoryPostProcessors()` | 模板锁定 | 扩展点：`BeanFactoryPostProcessor` 接口 |
-| `onRefresh()` | **子类必覆盖** | `SpringApplication.run()` 硬编码改为 12 步模板，每步可独立调试、计时、监控 |
-
-> **教学要点**：这里体现了 Spring 最核心的设计原则——**开放扩展，封闭修改**。
-
-### 24.2 为什么用三级缓存解决循环依赖，而不是二级？
-
-| 方案 | 可行性 | 问题 |
-|------|--------|------|
-| 一级缓存 | ❌ | 无法区分"正在创建"和"已完成"的 Bean |
-| 二级缓存 | ⚠️ | 无法延迟 AOP 代理创建 |
-| **三级缓存** | ✅ | L3 存储 `ObjectFactory` 函数式接口，**延迟生成**代理对象 |
-
-**核心原因：AOP 代理需要提前暴露引用。**
-
-```java
-// 如果只有二级缓存，AOP 代理会出现问题：
-// 场景：A 依赖 B，B 依赖 A，且 A 需要 AOP 代理
-
-// 二缓方案：
-//   A 实例化 → put L2(A 原始对象) → 注入 B → B 拿到的是原始 A（非代理！）
-//   → A 初始化完成 → AOP 创建代理对象 → 但 B 持有的已经是原始对象的引用 ❌
-
-// 三缓方案：
-//   A 实例化 → put L3(factory) → 注入 B → B 需要 A
-//   → 调用 factory.getObject() → 此时 getEarlyBeanReference()
-//   → ★ 如果需要 AOP 代理，这里就创建代理对象
-//   → B 拿到的是代理对象 → 完美 ✅
-```
-
-> **教学要点**：三级缓存的本质不是"多了一层缓存"，而是引入了 **`ObjectFactory` 函数式接口的延迟执行能力**。
+> **教学要点**：三级缓存的本质不是"多了一个 Map"，而是在 L3 引入了**延迟执行**（Lazy Evaluation）。这是函数式编程思想在 Spring 中的经典应用。
 
 ### 24.3 为什么 `@Transactional` 自调用失效？
 
-**这是面试最高频问题之一。**
+这是面试高频题，但关键不在于"怎么做"，而在于**"Spring 为什么选择这种代理方式"**。
 
-```java
-@Service
-public class UserService {
-    
-    @Transactional
-    public void methodA() {
-        // ★ 这里 this 不是代理对象！
-        this.methodB();  // ← 自调用，事务失效！
-    }
-    
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void methodB() {
-        // 期望：新事务
-        // 实际：没有事务！（因为绕过了代理）
-    }
-}
-```
+**Spring 面临的选择**：
+
+| 技术路线 | 代表框架 | 优点 | 缺点 |
+|----------|----------|------|------|
+| **CGLIB/JDK 动态代理** | Spring（选择此方案） | 非侵入、纯 Java、运行时灵活 | 自调用穿透、final/private 方法无效 |
+| **字节码织入（编译期）** | AspectJ | 无自调用问题、性能好 | 需要编译期工具、侵入性强 |
+| **字节码织入（类加载期）** | AspectJ LTW | 无自调用问题 | 需要 `-javaagent`、启动慢 |
+
+**Spring 为什么选代理而非织入？** 
+
+Rod Johnson 的核心理念是 **"非侵入性"**（Non-invasive）。如果你用了 AspectJ 编译期织入，你的代码就**依赖了 AspectJ 编译器**；用了 LTW，就**依赖了 Java Agent**。而 JDK/CGLIB 动态代理**只依赖 JDK 本身**，零侵入。
+
+**代价**：自调用穿透。但 Spring 认为这个代价**可接受**，因为有三种规避方案：
+1. 注入 self 引用
+2. 拆分为两个 Service
+3. `((UserService) AopContext.currentProxy()).methodB()`
 
 ```mermaid
 sequenceDiagram
@@ -2629,44 +2662,205 @@ sequenceDiagram
     participant Proxy as UserService 代理
     participant Real as UserService 真实对象
 
-    Caller->>Proxy: methodA()
+    Caller->>Proxy: methodA
     Note over Proxy: 事务拦截器 → 开启事务
-    Proxy->>Real: methodA()
-    Real->>Real: this.methodB()
-    Note over Real: ★ 直接调用，绕过代理<br/>事务拦截器未触发！
+    Proxy->>Real: methodA
+    Real->>Real: this.methodB
+    Note over Real: 直接调用，绕过代理<br/>事务拦截器未触发
     
     Real-->>Proxy: 返回
     Note over Proxy: 事务提交
     Proxy-->>Caller: 返回
 ```
 
-**解决方案：**
+> **教学要点**：每个技术决策都有代价。Spring 选择了"无侵入性"而放弃了"自调用支持"。理解这一点比死记硬背"自调用失效"重要得多。
 
-```java
-// 方案 1: 注入自己（Spring 会处理循环依赖）
-@Service
-public class UserService {
-    @Autowired
-    private UserService self;  // ★ 注入的是代理对象
-    
-    @Transactional
-    public void methodA() {
-        self.methodB();  // ✅ 通过代理调用
-    }
-}
+### 24.4 为什么 Spring Boot 用 SPI 而不是包扫描？
 
-// 方案 2: 拆分为两个 Service
-// 方案 3: AopContext.currentProxy()
+这是一个"空间换时间"的经典案例。
+
+```mermaid
+flowchart TB
+    subgraph SCAN["方案 A: @ComponentScan 包扫描"]
+        S1["遍历 classpath 所有 .class 文件"]
+        S2["逐个检查 @Component 注解"]
+        S3["加载、解析、注册"]
+    end
+    subgraph SPI["方案 B: SPI 声明式（Spring Boot 方案）"]
+        P1["读取 META-INF/spring/*.imports"]
+        P2["直接拿到全限定类名列表"]
+        P3["按需加载"]
+    end
+    SCAN -.->|"O(n) 扫描 → O(1) 读取"| SPI
 ```
 
-### 24.4 为什么 Spring Boot 用 SPI 而不是直接扫描？
+| 维度 | 包扫描 | SPI 声明式 |
+|------|--------|-----------|
+| 时间复杂度 | O(n)，n = classpath 中所有 class 数量 | O(1)，只读一个 imports 文件 |
+| 可控性 | 不可控（可能扫到第三方不想要的类） | 完全可控（第三方显式声明） |
+| 扩展性 | 第三方无法"声明"自己该被加载 | 第三方 jar 放入 imports 文件即可 |
+| 启动耗时（实测） | ~500ms（中型项目） | ~5ms |
 
-Spring Boot 自动配置采用 `spring.factories` / `AutoConfiguration.imports` 而不是包扫描，原因：
+**为什么 Spring Framework 本身不用 SPI 而用扫描？** — Spring Framework 是"框架"，它不知道你会把 Bean 写在哪里，所以必须扫描。Spring Boot 是"平台"，它知道所有 starter 是预先定义好的，可以用 SPI 加速。
 
-| 方案 | 优点 | 缺点 |
-|------|------|------|
-| 包扫描 `@ComponentScan` | 简单 | 慢（扫描所有 class）、不可控（可能扫到不该扫的） |
-| **SPI 声明式** | 快（O(1) 读取）、可控（显式声明）、第三方可扩展 | 需要显式声明文件 |
+### 24.5 为什么要有 IoC 容器？— 从一个真问题出发
+
+**没有 IoC 时（2000 年代 J2EE 时代）：**
+
+```java
+public class OrderService {
+    private UserRepository userRepo = new UserRepositoryImpl();  // 硬编码
+    private MailService mailService = new SmtpMailService();      // 硬编码
+    
+    public void createOrder(Order order) {
+        User user = userRepo.findById(order.getUserId());
+        mailService.send(user.getEmail(), "订单已创建");
+    }
+}
+// 问题：想换 MailService 实现？改代码。想加事务？改代码。想写单元测试？没法 Mock。
+```
+
+**有了 IoC 后：**
+
+```java
+public class OrderService {
+    private final UserRepository userRepo;    // 构造器注入
+    private final MailService mailService;     // 构造器注入
+    
+    public OrderService(UserRepository userRepo, MailService mailService) {
+        this.userRepo = userRepo;
+        this.mailService = mailService;
+    }
+}
+// OrderService 不再"依赖"具体实现，只"依赖"接口
+// 控制权反转：谁创建、怎么创建 → 交给容器
+```
+
+**IoC 的本质**：把"对象创建权"从程序员手中夺走，交给容器。程序员只声明"我需要什么"（依赖声明），不再操心"怎么创建"（控制反转）。
+
+> **教学要点**：IoC 不是 Spring 发明的，它是 Martin Fowler 在 2004 年总结出来的设计原则。Spring 把它做到了极致——不仅是"反转控制"，还加入了生命周期管理、AOP、事件等。
+
+### 24.6 为什么 BeanFactory 和 ApplicationContext 要分开？
+
+```mermaid
+flowchart TB
+    BF["BeanFactory<br/>只做一件事: getBean"]
+    
+    AC["ApplicationContext<br/>= BeanFactory<br/>+ 国际化 MessageSource<br/>+ 事件 ApplicationEventPublisher<br/>+ 资源加载 ResourceLoader<br/>+ 生命周期 Lifecycle"]
+    
+    BF -->|"基础"| AC
+```
+
+**单一职责原则的极致体现**：
+- `BeanFactory`：只管"有没有、给不给"Bean，**零依赖其他概念**
+- `ApplicationContext`：在 `BeanFactory` 基础上，叠加"企业级特性"
+
+**为什么不用一个接口全干了？** 因为有些场景（如资源受限的嵌入式设备、只读配置）只需要 `BeanFactory`，不需要事件/国际化/资源加载。分层设计让用户按需选择。
+
+### 24.7 为什么 @Configuration 要用 CGLIB 代理？
+
+```java
+@Configuration
+public class AppConfig {
+    @Bean
+    public UserRepository userRepo() {
+        return new UserRepositoryImpl(dataSource());  // ← 调用了 dataSource()
+    }
+    
+    @Bean
+    public DataSource dataSource() {
+        return new HikariDataSource();
+    }
+}
+// 问题：上面调用了 dataSource()，会创建几个 DataSource？
+// 如果是普通 Java 调用 → 2 个 DataSource!
+// Spring 的处理：CGLIB 代理 AppConfig → dataSource() 被拦截 →
+// 如果已创建 → 从容器返回单例 → 只创建 1 个 ✅
+```
+
+**为什么不用 JDK 动态代理？** 因为 `@Configuration` 类**不实现任何接口**，JDK 动态代理要求接口。
+
+**Spring 的处理机制**：
+```java
+// 实际运行时，AppConfig 被 CGLIB 增强为：
+AppConfig$$EnhancerBySpringCGLIB extends AppConfig {
+    @Override
+    public DataSource dataSource() {
+        // 拦截逻辑：如果容器中已有 DataSource Bean，直接返回
+        if (beanFactory.containsSingleton("dataSource")) {
+            return beanFactory.getBean("dataSource");
+        }
+        return super.dataSource();  // 首次调用 → 真正执行方法
+    }
+}
+```
+
+### 24.8 Spring Boot 的"约定优于配置"具体到代码层面
+
+**不是一句口号，而是一套精密的条件链**：
+
+```java
+// 约定 1: classpath 有 spring-webmvc → 自动启用 MVC
+@ConditionalOnWebApplication(type = Type.SERVLET)
+@ConditionalOnClass({ Servlet.class, DispatcherServlet.class, WebMvcConfigurer.class })
+
+// 约定 2: 用户没有自定义 ViewResolver → 用默认的
+@ConditionalOnMissingBean(InternalResourceViewResolver.class)
+
+// 约定 3: 有 DataSource 但没配 JdbcTemplate → 自动创建
+@ConditionalOnClass({ DataSource.class, JdbcTemplate.class })
+@ConditionalOnSingleCandidate(DataSource.class)
+@ConditionalOnMissingBean(JdbcOperations.class)
+```
+
+每一条"约定"都是一个 `@Conditional` 注解。Spring Boot 不是"瞎猜"你需要什么，而是通过 **classpath 探测 + 用户显式排除 + Bean 存在性检查** 三重判断，精确激活或跳过每一个自动配置类。
+
+### 24.9 为什么需要 FactoryBean？
+
+`FactoryBean` 是 Spring 设计中最容易被低估的接口，但 **AOP 代理、MyBatis Mapper、Feign Client** 全部依赖它。
+
+```java
+// 普通 Bean: getBean("userRepo") → 返回 UserRepositoryImpl 实例
+// FactoryBean: getBean("userRepo") → 返回 FactoryBean.getObject() 的结果！
+
+public interface FactoryBean<T> {
+    T getObject() throws Exception;     // ★ 返回的不是 FactoryBean 本身，而是产物
+    Class<?> getObjectType();
+    default boolean isSingleton() { return true; }
+}
+```
+
+**为什么需要它？** 因为有些 Bean 的创建过程**不能用简单的 new + setter 完成**：
+
+```java
+// MyBatis Mapper 接口：没有实现类，怎么创建 Bean？
+public interface UserMapper {  // 纯接口！
+    User findById(Long id);
+}
+
+// 解决方案：MapperFactoryBean
+// getObject() → sqlSession.getMapper(UserMapper.class) → JDK 动态代理
+```
+
+> **教学要点**：`FactoryBean` 是 Spring 的"工厂模式"内置支持。当你遇到"这个 Bean 不能直接 new 出来"的场景，第一个想到的应该是 `FactoryBean`。
+
+### 24.10 Spring 设计决策时间线：从 2002 到 2025
+
+| 年份 | 决策 | 为什么？ | 对今天的影响 |
+|------|------|----------|-------------|
+| 2002 | Rod Johnson 写《Expert One-on-One J2EE》 | 受够了 EJB 2.x 的笨重 | Spring 的基因就是"反臃肿" |
+| 2004 | Spring 1.0 发布，IoC + AOP | 用 DI 替代 Service Locator | BeanFactory 至今是核心 |
+| 2006 | Spring 2.0，XML Schema + @Autowired | XML 太冗长 | 注解驱动的开端 |
+| 2009 | Spring 3.0，Java Config + @Configuration | 彻底告别 XML | 你的项目可能一行 XML 都没有了 |
+| 2014 | Spring Boot 1.0 | 配置地狱 → 一键启动 | 改变了 Java 开发范式 |
+| 2017 | Spring 5.0，WebFlux | 高并发非阻塞需求 | Servlet 不再唯一选择 |
+| 2022 | Spring Boot 3.0，Java 17 基线 | 拥抱现代 Java | 虚拟线程、AOT 成为可能 |
+| 2024 | Spring Boot 3.2+，虚拟线程 GA | Project Loom 成熟 | 百万级并发不再是梦 |
+
+**为什么 Spring 能在 20 年间保持生命力？**
+1. **非侵入性** — 你的代码不依赖 Spring 的 import（除了注解）
+2. **渐进式** — 可以只用 IoC，不加 AOP；可以用 Boot，不上 Cloud
+3. **社区治理** — Pivotal/VMware/Broadcom 连续收购但 Spring 始终保持 Apache 2.0 开源
 
 ---
 
