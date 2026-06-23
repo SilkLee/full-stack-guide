@@ -1072,7 +1072,7 @@ sequenceDiagram
     participant User as 调用方
     participant BF as AbstractBeanFactory
     participant Cache as DefaultSingletonBeanRegistry
-    participant Create as AbstractAutowireCapableBeanFactory
+    participant Creator as AbstractAutowireCapableBeanFactory
     participant CI as InstantiationStrategy
 
     User->>BF: getBean "userService"
@@ -1100,27 +1100,27 @@ sequenceDiagram
 
         Note over BF: 5. 按 scope singleton 创建
         BF->>Cache: getSingleton with ObjectFactory
-        Cache->>Create: build new Bean instance
-        Create->>Create: doCreateBean
+        Cache->>Creator: build new Bean instance
+        Creator->>Creator: doCreateBean
 
-        Note over Create: 5.1 创建实例
-        Create->>CI: instantiateBean - 反射/CGLIB
+        Note over Creator: 5.1 创建实例
+        Creator->>CI: instantiateBean - 反射/CGLIB
 
-        Note over Create: 5.2 合并 BeanDefinition
-        Create->>Create: applyMergedBeanDefinitionPostProcessors
+        Note over Creator: 5.2 合并 BeanDefinition
+        Creator->>Creator: applyMergedBeanDefinitionPostProcessors
 
-        Note over Create: 5.3 提前暴露引用-解决循环依赖
-        Create->>Cache: addSingletonFactory
+        Note over Creator: 5.3 提前暴露引用-解决循环依赖
+        Creator->>Cache: addSingletonFactory
         Note over Cache: ObjectFactory - 放入 L3 缓存
 
-        Note over Create: 5.4 属性填充
-        Create->>Create: populateBean - Autowired 注入
+        Note over Creator: 5.4 属性填充
+        Creator->>Creator: populateBean - Autowired 注入
 
-        Note over Create: 5.5 初始化
-        Create->>Create: initializeBean
-        Note over Create: Aware - BP.before - init - BP.after
+        Note over Creator: 5.5 初始化
+        Creator->>Creator: initializeBean
+        Note over Creator: Aware - BP.before - init - BP.after
 
-        Create-->>Cache: Bean 实例
+        Creator-->>Cache: Bean 实例
         Cache->>Cache: addSingleton - 放入 L1, 移除 L2/L3
         Cache-->>BF: Bean 实例
 
