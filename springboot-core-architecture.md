@@ -163,7 +163,7 @@ sequenceDiagram
     SA->>Env: 将 Environment 设置到 Context
     SA->>Ctx: 执行 Initializers
     SA->>Listener: contextPrepared(ctx)
-    SA->>Ctx: 加载 sources (主类) 注册为 BeanDefinition
+    SA->>Ctx: "加载 sources (主类) 注册为 BeanDefinition"
     SA->>Listener: contextLoaded(ctx)
     
     Note over SA,BF: [阶段8] 刷新 Context ★最核心
@@ -1064,61 +1064,61 @@ sequenceDiagram
     participant Create as AbstractAutowireCapableBeanFactory
     participant CI as InstantiationStrategy
     
-    User->>BF: getBean("userService")
-    BF->>BF: doGetBean()
+    User->>BF: "getBean(\"userService\")"
+    BF->>BF: "doGetBean()"
     
-    Note over BF: 1. 转换 beanName<br/>(去除 & 前缀, 解析别名)
-    BF->>BF: transformedBeanName()
+    Note over BF: "1. 转换 beanName<br/>(去除 & 前缀, 解析别名)"
+    BF->>BF: "transformedBeanName()"
     
-    Note over BF: 2. 尝试从缓存获取
-    BF->>Cache: getSingleton(beanName)
-    Cache->>Cache: 检查 singletonObjects (L1)
-    alt L1 命中
-        Cache-->>BF: 返回已创建的单例 Bean
-        BF-->>User: Bean 实例
-    else L1 未命中
-        Note over Cache: 检查 earlySingletonObjects (L2)
-        Note over Cache: 检查 singletonFactories (L3)
-        Cache-->>BF: null (未创建)
+    Note over BF: "2. 尝试从缓存获取"
+    BF->>Cache: "getSingleton(beanName)"
+    Cache->>Cache: "检查 singletonObjects (L1)"
+    alt "L1 命中"
+        Cache-->>BF: "返回已创建的单例 Bean"
+        BF-->>User: "Bean 实例"
+    else "L1 未命中"
+        Note over Cache: "检查 earlySingletonObjects (L2)"
+        Note over Cache: "检查 singletonFactories (L3)"
+        Cache-->>BF: "null (未创建)"
         
-        Note over BF: 3. 检查是否存在 BeanDefinition
-        BF->>BF: getMergedLocalBeanDefinition(beanName)
+        Note over BF: "3. 检查是否存在 BeanDefinition"
+        BF->>BF: "getMergedLocalBeanDefinition(beanName)"
         
-        Note over BF: 4. 检查依赖关系 @DependsOn
-        BF->>BF: 递归创建依赖的 Bean
+        Note over BF: "4. 检查依赖关系 @DependsOn"
+        BF->>BF: "递归创建依赖的 Bean"
         
-        Note over BF: 5. 按 scope 创建
+        Note over BF: "5. 按 scope 创建"
         
-        alt singleton
-            BF->>Cache: getSingleton(beanName, ObjectFactory)
-            Cache->>Create: createBean(beanName, mbd, args)
-            Create->>Create: doCreateBean()
+        alt "singleton"
+            BF->>Cache: "getSingleton(beanName, ObjectFactory)"
+            Cache->>Create: "createBean(beanName, mbd, args)"
+            Create->>Create: "doCreateBean()"
             
-            Note over Create: 5.1 创建实例
-            Create->>CI: instantiateBean() → 反射/CGLIB
+            Note over Create: "5.1 创建实例"
+            Create->>CI: "instantiateBean() → 反射/CGLIB"
             
-            Note over Create: 5.2 合并 BeanDefinition
-            Create->>Create: applyMergedBeanDefinitionPostProcessors()
+            Note over Create: "5.2 合并 BeanDefinition"
+            Create->>Create: "applyMergedBeanDefinitionPostProcessors()"
             
-            Note over Create: 5.3 ★提前暴露引用(解决循环依赖)
-            Create->>Cache: addSingletonFactory(beanName, ()→getEarlyBeanReference())
-            Note over Cache: 放入 L3 缓存
+            Note over Create: "5.3 ★提前暴露引用(解决循环依赖)"
+            Create->>Cache: "addSingletonFactory(beanName, () → getEarlyBeanReference())"
+            Note over Cache: "放入 L3 缓存"
             
-            Note over Create: 5.4 属性填充
-            Create->>Create: populateBean() → @Autowired 注入
+            Note over Create: "5.4 属性填充"
+            Create->>Create: "populateBean() → @Autowired 注入"
             
-            Note over Create: 5.5 初始化
-            Create->>Create: initializeBean()
-            Note over Create: Aware 回调 → BeanPostProcessor.before → init → BeanPostProcessor.after
+            Note over Create: "5.5 初始化"
+            Create->>Create: "initializeBean()"
+            Note over Create: "Aware 回调 → BeanPostProcessor.before → init → BeanPostProcessor.after"
             
-            Create-->>Cache: Bean 实例
-            Cache->>Cache: addSingleton() → 放入 L1, 移除 L2/L3
-            Cache-->>BF: Bean 实例
-        else prototype
-            BF->>Create: createBean() (每次新建)
+            Create-->>Cache: "Bean 实例"
+            Cache->>Cache: "addSingleton() → 放入 L1, 移除 L2/L3"
+            Cache-->>BF: "Bean 实例"
+        else "prototype"
+            BF->>Create: "createBean() (每次新建)"
         end
         
-        BF-->>User: Bean 实例
+        BF-->>User: "Bean 实例"
     end
 ```
 
@@ -1177,7 +1177,7 @@ sequenceDiagram
     
     Note over C: 4. populateBean → 注入 serviceA
     C->>L3: getSingleton("serviceA")
-    L3->>L2: 调用 factory.getObject()<br/>移入 L2: serviceA → 早期引用
+    L3->>L2: "调用 factory.getObject()<br/>移入 L2: serviceA → 早期引用"
     L2-->>B: 返回 serviceA 早期引用
     Note over B: serviceA 注入完成
     
@@ -1919,7 +1919,7 @@ sequenceDiagram
         Proxy-->>Container: 执行结果
     end
     
-    Proxy-->>Container: 返回代理对象 (注入完成)
+    Proxy-->>Container: "返回代理对象 (注入完成)"
 ```
 
 ### 17.2 JpaRepository 方法分发
@@ -2027,14 +2027,14 @@ sequenceDiagram
     Filter->>Filter: 提取 username/password → UsernamePasswordAuthenticationToken
     
     Filter->>AM: authenticate(token)
-    AM->>Provider: supports(token)? → authenticate(token)
+    AM->>Provider: "supports(token)? → authenticate(token)"
     
     Provider->>UDS: loadUserByUsername(username)
-    UDS-->>Provider: UserDetails (含加密密码)
+    UDS-->>Provider: "UserDetails (含加密密码)"
     
     Provider->>Provider: PasswordEncoder.matches(password, hashedPassword)
     alt 密码匹配
-        Provider-->>AM: Authentication (已认证)
+        Provider-->>AM: "Authentication (已认证)"
         AM-->>Filter: Authentication
         Filter->>SC: SecurityContextHolder.setContext(authentication)
         Filter-->>User: 302 Redirect / 登录成功
@@ -2308,7 +2308,7 @@ sequenceDiagram
     DS->>Exception: @ExceptionHandler(UserNotFoundException)
     
     alt @ControllerAdvice 处理
-        Exception-->>DS: ResponseEntity (JSON 错误信息)
+        Exception-->>DS: "ResponseEntity (JSON 错误信息)"
         DS-->>Client: HTTP 404 + JSON {"error":"用户不存在"}
     else 无 @ControllerAdvice
         Note over DS: 异常继续传播到 Servlet 容器
