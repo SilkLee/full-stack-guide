@@ -727,138 +727,396 @@ sequenceDiagram
 
 ## 11. JVM 调优实战
 
-### 11.1 核心监控工具
+> 核心原则：**测量 → 分析 → 调整 → 验证**，禁止凭感觉改参数。
+
+### 11.1 核心监控工具与真实输出
 
 ```bash
-# 1. 查看 JVM 进程
-jps -l
+# 1. jps: 查看 JVM 进程
+$ jps -l
+12345 com.example.AppMain
+12346 sun.tools.jps.Jps
 
-# 2. 查看 GC 情况（最常用）
-jstat -gcutil <pid> 1000          # 每秒输出 GC 统计
-jstat -gc <pid> 1000              # 详细 GC 数据
+# 2. jstat: 实时 GC 监控（最常用）
+$ jstat -gcutil 12345 1000 5
+  S0     S1     E      O      M     CCS    YGC     YGCT    FGC    FGCT     GCT
+  0.00  99.80  45.12  23.45  96.78  94.32   1234   12.345     5    2.345   14.690
+  0.00  99.80  48.33  23.45  96.78  94.32   1234   12.345     5    2.345   14.690
+# S0/S1: Survivor 使用率  E: Eden 使用率  O: 老年代使用率
+# M: Metaspace使用率  YGC: Young GC次数  FGC: Full GC次数
+# YGCT: Young GC总时间  FGCT: Full GC总时间
 
-# 3. 查看线程
-jstack <pid>                      # 线程快照, 排查死锁/CPU 高
+# 3. jstack: 线程快照
+$ jstack 12345 | grep -A5 "Thread.State"
+# "http-nio-8080-exec-1" #28 daemon prio=5 tid=0x... nid=0x5a3f waiting
+#    java.lang.Thread.State: WAITING (parking)
+#         at sun.misc.Unsafe.park(Native Method)
 
-# 4. 查看堆
-jmap -heap <pid>                  # 堆配置 + 使用情况
-jmap -histo:live <pid>            # 存活对象直方图
-jmap -dump:format=b,file=heap.hprof <pid>  # 堆转储
+# 4. jmap: 堆分析
+$ jmap -histo:live 12345 | head -20
+ num     #instances         #bytes  class name
+   1:       1854321       59338272  [C           ★ char[] 占 59M
+   2:       1234567       29629608  java.lang.String
+   3:        500000       24000000  com.example.User  ★ User 对象 24M
+   4:        100000       16000000  [B
+# 按实例数量和字节数排序, 快速定位"谁占内存最多"
 
-# 5. 查看 JIT 编译
-jstat -compiler <pid>
-
-# 6. 在线诊断(JDK 9+)
-jhsdb jmap --heap --pid <pid>
+# 5. jcmd: 多功能诊断(JDK 7+)
+$ jcmd 12345 VM.flags          # 当前有效 JVM 参数
+$ jcmd 12345 GC.heap_info      # 堆详情
+$ jcmd 12345 Thread.print      # 等同于 jstack
+$ jcmd 12345 GC.run            # 触发一次 Full GC
 ```
 
-### 11.2 GC 日志分析（JDK 8 vs 9+）
+### 11.2 GC 日志深度解读
 
 ```bash
-# JDK 8 GC 日志
--XX:+PrintGCDetails -XX:+PrintGCDateStamps -Xloggc:gc.log
-
-# JDK 9+ 统一日志
+# JDK 9+ 统一日志格式
 -Xlog:gc*=info:file=gc.log:time,level,tags
 
-# 解读 GC 日志:
-# [GC (Allocation Failure) [PSYoungGen: 65536K->10240K(76288K)]
-#  65536K->20480K(251392K), 0.0034567 secs]
-#  含义: 新生代 65M→10M, 总堆 65M→20M, 耗时 3.5ms
+# 实际日志示例:
+[2024-01-15T10:30:00.123+0800][info][gc,start] GC(1234) Pause Young (Allocation Failure)
+[2024-01-15T10:30:00.123+0800][info][gc,heap] GC(1234) Eden: 65536K->0K(76288K)
+[2024-01-15T10:30:00.123+0800][info][gc,heap] GC(1234) Survivor: 10240K->0K(10240K)
+[2024-01-15T10:30:00.123+0800][info][gc,heap] GC(1234) Old: 10240K->20480K(175104K)
+[2024-01-15T10:30:00.126+0800][info][gc     ] GC(1234) Pause Young 3.456ms
+# 解读:
+#   新生代: Eden 65M→0(Survivor 放不下, 0→0)
+#   老年代: 10M→20M(对象晋升)
+#   总堆: 75M→20M(回收了 55M)
+#   耗时: 3.456ms ← 正常
+
+# ★ 异常信号:
+# Full GC 频繁 (> 1次/小时) → 内存泄漏或堆太小
+# Young GC 耗时 > 100ms → 新生代太大或对象太大
+# GC 后老年代持续增长不回降 → 内存泄漏
+# Promotion Failed → Survivor 太小, 对象直接进老年代
 ```
 
-### 11.3 调优核心原则
+### 11.3 五种真实场景调优案例
 
-```mermaid
-flowchart TD
-    Start["开始调优"] --> Measure["测量: jstat / GC 日志"]
-    Measure --> Analyze{"分析瓶颈"}
-    
-    Analyze -->|"Minor GC 频繁"| Minor["增大新生代<br/>-Xmn / -XX:NewRatio"]
-    Analyze -->|"Full GC 频繁"| Full["分析 Full GC 原因<br/>jmap -histo 看大对象"]
-    Analyze -->|"STW 过长"| Pause["换收集器<br/>CMS → G1 → ZGC"]
-    Analyze -->|"OOM"| OOM["堆转储 + MAT 分析<br/>查内存泄漏"]
-    
-    Minor --> Test["测试验证"]
-    Full --> Test
-    Pause --> Test
-    OOM --> Test
-    Test -->|"达标"| Done["完成"]
-    Test -->|"不达标"| Measure
-```
-
-### 11.4 常用 JVM 参数速查
-
-| 分类 | 参数 | 含义 |
-|------|------|------|
-| **堆** | `-Xms2G -Xmx2G` | 初始/最大堆 = 2G |
-| **新生代** | `-Xmn1G` 或 `-XX:NewRatio=2` | 新生代 1G 或 老:新 = 2:1 |
-| **元空间** | `-XX:MetaspaceSize=256M -XX:MaxMetaspaceSize=512M` | 元空间 |
-| **栈** | `-Xss1M` | 线程栈大小 |
-| **收集器** | `-XX:+UseG1GC` | G1 |
-| **GC 日志** | `-Xlog:gc*:file=gc.log` | JDK 9+ GC 日志 |
-| **OOM dump** | `-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dump/` | OOM 时自动 dump |
-| **压缩指针** | `-XX:+UseCompressedOops` | 默认开启 |
-| **分层编译** | `-XX:+TieredCompilation` | 默认开启 |
-
-### 11.5 生产环境推荐配置
+#### 场景 1: 高并发 Web API（QPS 5000, 4C8G）
 
 ```bash
-# 通用 Web 应用 (4核8G)
+# 症状: 高峰期 Young GC 每 2 秒一次, 每次 50ms, 接口 P99 波动大
+# jstat -gcutil 输出:
+  S0     S1     E      O      M     YGC    FGC
+  50.00  0.00   99.00  45.00  96.00  4500   3
+
+# 分析: Eden 每 2 秒打满→Young GC 频繁→对象晋升过快
+# 调优:
 java -Xms4G -Xmx4G \
+     -XX:NewRatio=1 \           # ★ 新生代:老年代 = 1:1 (默认 1:2)
+     -XX:SurvivorRatio=4 \      # ★ Eden:S0:S1 = 4:1:1 (默认 8:1:1)
+     -XX:MaxTenuringThreshold=8 \ # ★ 降低晋升年龄
      -XX:+UseG1GC \
-     -XX:MaxGCPauseMillis=200 \
-     -XX:+HeapDumpOnOutOfMemoryError \
-     -XX:HeapDumpPath=/var/log/dump/ \
-     -Xlog:gc*:file=/var/log/gc.log:time,level,tags \
+     -XX:MaxGCPauseMillis=100 \
      -jar app.jar
 
-# 大堆/低延迟 (>16G)
-java -Xms16G -Xmx16G \
-     -XX:+UseZGC \
-     -XX:+ZGenerational \
-     -XX:+HeapDumpOnOutOfMemoryError \
-     -jar app.jar
+# 效果: Young GC 降到每 15 秒一次, 每次 20ms
+```
+
+#### 场景 2: 批处理大文件（单机, 目标吞吐量最大）
+
+```bash
+# 症状: 处理 100GB 日志文件, 长时间运行 CPU 100%
+# 调优:
+java -Xms8G -Xmx8G \
+     -XX:+UseParallelGC \        # ★ 吞吐量优先(不是 G1!)
+     -XX:ParallelGCThreads=8 \   # GC 线程数 = CPU 核数
+     -XX:GCTimeRatio=19 \        # ★ GC 时间占比 ≤ 5% (1/20)
+     -jar batch.jar
+
+# 效果: STW 每次 200ms 但次数少, 总吞吐量 99%
+```
+
+#### 场景 3: 内存泄漏导致的 OOM
+
+```bash
+# 症状: 运行几天后 OOM, 重启恢复
+# 第一步: 保留现场
+-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dump/
+
+# 第二步: MAT 分析 heap.hprof
+#   → Leak Suspects → 发现 ConcurrentHashMap 持有 200 万个对象
+#   → Dominator Tree → 追溯到定时任务每次 put 不清除旧数据
+#   → Path to GC Roots → static 变量引用 → 确认泄漏
+
+# 第三步: 修复代码
+@Scheduled(fixedRate = 60000)
+public void refreshCache() {
+    Map<String, User> newData = loadFromDB();
+    userCache.clear();              // ★ 先清理!
+    userCache.putAll(newData);
+}
+```
+
+#### 场景 4: Docker 容器内 OOMKilled
+
+```bash
+# 症状: K8s Pod 频繁被 kill, 日志显示 Exit Code 137 (OOMKilled)
+# Docker 限制 2G, 但 JVM 按物理机分配了 4G 堆
+
+# 修复:
+# JDK 8/9/10: 手动计算
+-XX:MaxRAMPercentage=75.0     # ★ JVM 使用容器内存的 75%
+# 容器 2G → JVM 堆 ≤ 1.5G, 剩余 0.5G 给 Metaspace/栈/Native
+
+# JDK 10+: 自动感知
+-XX:+UseContainerSupport      # ★ 默认开启
+-Xlog:os+container=trace      # 查看容器检测日志
+```
+
+#### 场景 5: Metaspace OOM（动态代理过多）
+
+```bash
+# 症状: java.lang.OutOfMemoryError: Metaspace
+# jstat -gc 显示: MU(Metaspace Used) 持续增长, 已达 MaxMetaspaceSize
+
+# 排查:
+$ jcmd <pid> VM.classloader_stats
+# 输出:
+# ClassLoader        Parent       Classes  ChunkSz
+# bootstrap          null         3000     4.2M
+# app                 platform     15000    35.8M  ← ★ 自己应用的类 1.5 万!
+# CGLIB$Proxy_1      app          5000     12.3M  ← ★ CGLIB 代理类太多!
+
+# 根因: 代码中反复创建 CGLIB 代理而没有缓存代理对象
+# 修复: 缓存代理, 或使用 JDK 动态代理(不生成新类)
+```
+
+### 11.4 jstack 实战：排查死锁与 CPU 高
+
+```bash
+# 1. 排查 CPU 100%
+$ top -H -p <pid>              # 找到 CPU 最高的线程 TID
+$ printf "%x\n" <tid>          # TID 转十六进制
+$ jstack <pid> | grep -A20 <nid>  # 找到对应线程的堆栈
+
+# 输出示例:
+# "main" #1 prio=5 tid=0x... nid=0x5a3f runnable
+#    at com.example.SlowService.calculate(SlowService.java:25)  ← ★ 热点方法
+
+# 2. 排查死锁
+$ jstack -l <pid> | grep "deadlock"
+# Found 1 deadlock.
+# "Thread-1": waiting to lock Monitor@0x..., held by "Thread-2"
+# "Thread-2": waiting to lock Monitor@0x..., held by "Thread-1"
 ```
 
 ---
 
 ## 12. 常见 OOM 与排查
 
-| OOM 类型 | 原因 | 排查工具 | 典型场景 |
-|----------|------|----------|----------|
-| `Java heap space` | 堆内存不够 | `jmap -histo` + MAT | 大对象/内存泄漏 |
-| `GC overhead limit exceeded` | GC 效率太低（98%时间在 GC） | GC 日志 | 堆太小/内存泄漏 |
-| `Metaspace` | 加载类太多 | `jstat -class` | 动态生成类过多 |
-| `unable to create new native thread` | 线程数超限 | `jstack` / `ulimit -u` | 线程池无界 |
-| `Direct buffer memory` | 直接内存不够 | `jmap -dump` + MAT | NIO 泄漏 |
+### 12.1 OOM 全景诊断流程
 
-**MAT (Memory Analyzer Tool) 排查步骤**：
-
-```bash
-# 1. 生成堆转储
-jmap -dump:format=b,file=heap.hprof <pid>
-
-# 2. 用 MAT 打开 heap.hprof
-# 3. Leak Suspects Report → 查看嫌疑泄漏对象
-# 4. Dominator Tree → 看谁持有了最多内存
-# 5. Path to GC Roots → 追踪引用链
+```mermaid
+flowchart TD
+    OOM["OOM 发生"] --> DUMP{"有 heap dump?"}
+    
+    DUMP -->|"有"| MAT["MAT 分析"]
+    DUMP -->|"无"| LOGS["查 GC 日志 + 错误消息"]
+    
+    LOGS --> TYPE{"OOM 类型?"}
+    MAT --> TYPE
+    
+    TYPE -->|"Java heap space"| HEAP["堆 OOM 排查"]
+    TYPE -->|"GC overhead limit"| GCOL["GC 效率排查"]
+    TYPE -->|"Metaspace"| META["类加载排查"]
+    TYPE -->|"unable to create thread"| THREAD["线程排查"]
+    TYPE -->|"Direct buffer"| DIRECT["直接内存排查"]
+    TYPE -->|"OOMKilled(容器)"| K8S["容器 OOM 排查"]
+    
+    HEAP --> HEAP_FIX["增大堆/修泄漏"]
+    GCOL --> GC_FIX["增大堆/修泄漏"]
+    META --> META_FIX["限制动态代理/增大 Meta"]
+    THREAD --> THREAD_FIX["限制线程池/ulimit"]
+    DIRECT --> DIRECT_FIX["限制 DirectBuffer/增大"]
+    K8S --> K8S_FIX["调整 limits/UseContainerSupport"]
 ```
+
+### 12.2 六种 OOM 逐一拆解
+
+#### 12.2.1 Java heap space
 
 ```java
-// 内存泄漏的典型代码模式
-public class LeakyCache {
-    // ❌ Map 的 key 不断增加, 永不清理
-    private static final Map<String, Object> cache = new HashMap<>();
-    
-    public void put(String key, Object value) {
-        cache.put(key, value);  // 只有 put, 没有 remove!
-    }
+// ★ 最经典的 OOM, 分为"真不够"和"泄漏"两种
+
+// 类型 A: 真不够——堆确实太小
+// 现象: -Xmx256M, Dump 分析无异常大对象
+// 修复: -Xmx1G
+
+// 类型 B: 内存泄漏——垃圾越积越多
+// 现象: Dump 分析发现某类对象数量持续增长
+// 检测: jstat -gcutil 每 10 秒采样, 老年代持续增长不回降
+```
+
+**5 种常见泄漏模式**：
+
+```java
+// 模式 1: static 集合永不清理
+public class DataHolder {
+    private static final List<byte[]> DATA = new ArrayList<>();
+    public static void add(byte[] data) { DATA.add(data); }
+    // ★ DATA 是 GC Root, 永远可达, 永远不回收
 }
 
-// ✅ 修复: 使用 WeakHashMap 或 Guava Cache
-private static final Map<String, Object> cache = new WeakHashMap<>();
+// 模式 2: ThreadLocal 未清理
+public class RequestContext {
+    private static final ThreadLocal<Map<String, Object>> CTX = new ThreadLocal<>();
+    public static void set() { CTX.set(new HashMap<>()); }
+    // ★ 线程池线程不销毁 → ThreadLocal 值永远不释放!
+    // 修复: finally { CTX.remove(); }
+}
+
+// 模式 3: 监听器未注销
+public class EventBus {
+    private final List<EventListener> listeners = new CopyOnWriteArrayList<>();
+    public void register(EventListener l) { listeners.add(l); }
+    // ★ 只有 addListener, 没有 removeListener!
+    // 修复: 提供 unregister(), 或使用 WeakReference
+}
+
+// 模式 4: 内部类持有外部引用
+public class MainView {
+    private byte[] hugeBitmap = new byte[100 * 1024 * 1024]; // 100MB
+    void onClick() {
+        new Thread(() -> {
+            // 匿名内部类默认持有外部类 MainView.this 的引用
+            // 此线程长时间运行 → hugeBitmap 无法回收!
+        }).start();
+    }
+    // 修复: 用静态内部类, 或将 hugeBitmap 置 null
+}
+
+// 模式 5: 字符串 substring JDK 6 陷阱(已修复)
+// JDK 6: substring() 共享底层 char[], 小串引用大串 → 大串无法回收
+// JDK 7+: substring() 复制 char[], 已修复
 ```
+
+#### 12.2.2 GC overhead limit exceeded
+
+```bash
+# 错误消息:
+# java.lang.OutOfMemoryError: GC overhead limit exceeded
+
+# 含义: 98% 的时间在做 GC, 但只回收了 <2% 的堆
+# JVM 认为"再 GC 也没用", 主动抛出 OOM
+
+# 典型场景: 堆 256M, 应用实际需要 1G
+# jstat 输出:
+  S0    S1    E      O      M     FGC    FGCT
+  0.00  100. 100.0  99.99  96.00  9999   3600.0
+# FGC=9999 次! 几乎每秒一次 Full GC
+
+# 修复: 增大堆 → -Xmx2G
+# 临时关闭(不推荐): -XX:-UseGCOverheadLimit
+```
+
+#### 12.2.3 Metaspace
+
+```bash
+# 错误: java.lang.OutOfMemoryError: Metaspace
+
+# 排查步骤:
+# 1. 确认 Metaspace 使用情况
+$ jstat -gc <pid> 1000
+ MU      MC      CCSC
+ 250.0   256.0   32.0
+# MU=250M, MC=256M(最大值) → 即将 OOM
+
+# 2. 找谁加载了这么多类
+$ jcmd <pid> VM.classloader_stats
+# 发现 CGLIB$Proxy 类 10000+
+
+# 修复:
+# 短期: -XX:MaxMetaspaceSize=512M
+# 长期: 缓存代理, 不用每次 new Proxy
+```
+
+#### 12.2.4 unable to create new native thread
+
+```bash
+# 错误: java.lang.OutOfMemoryError: unable to create new native thread
+
+# 根因: 不是 JVM 堆不够, 是 OS 线程数超限!
+# 每个线程默认栈 1MB(-Xss), 加上 JVM 开销约 2MB
+# 4G 内存 → 最多 ~2000 个线程
+
+# 排查:
+$ ulimit -u          # 用户最大进程数(含线程)
+$ jstack <pid> | grep "Thread.State" | wc -l   # 当前线程数
+$ cat /proc/sys/kernel/threads-max    # 系统最大线程数
+
+# 修复:
+# 1. 减少线程池大小 (根本解决)
+# 2. 减小栈: -Xss512k
+# 3. 增大 ulimit: ulimit -u 65535
+# 4. JDK 21+: 换虚拟线程 (栈按需分配)
+```
+
+#### 12.2.5 Direct buffer memory
+
+```bash
+# 错误: java.lang.OutOfMemoryError: Direct buffer memory
+
+# 根因: NIO 的 ByteBuffer.allocateDirect() 使用堆外内存
+# 默认 ≈ -Xmx 值, 但不在堆内!
+
+# 排查:
+$ jcmd <pid> VM.native_memory summary
+# - Direct Buffer (reserved=1024M, committed=1020M) ← 快满了!
+
+# 修复:
+-XX:MaxDirectMemorySize=2G    # 显式增大
+# 代码: 确保 DirectByteBuffer 被 GC 回收(可能被 Finalizer 延迟)
+```
+
+#### 12.2.6 Docker OOMKilled
+
+```bash
+# K8s Pod 被 kill, exit code 137 (= 128 + 9, SIGKILL)
+
+# 根因: Java 进程(堆+Metaspace+栈+Native+Direct) > container limits
+# JDK 8/9 不感知容器限制, 按物理机内存计算
+
+# 修复:
+-XX:MaxRAMPercentage=75.0    # ★ Linux 容器下必须加!
+-XX:InitialRAMPercentage=75.0
+-XX:+UseContainerSupport     # JDK 10+ 默认
+
+# 验证:
+$ java -XX:+PrintFlagsFinal -version | grep RAM
+# MaxRAMPercentage = 75.0
+```
+
+### 12.3 MAT 分析实战三步
+
+```bash
+# Step 1: 获取 Dump
+# 自动(OOM时): -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dump/
+# 手动: jmap -dump:live,format=b,file=heap.hprof <pid>
+
+# Step 2: 用 MAT 打开 → Leak Suspects Report
+# 会告诉你"哪个对象持有最多内存"和"引用链"
+
+# Step 3: 定位泄漏代码
+# 路径: Dominator Tree → 找到可疑大对象 → 
+#       右键 "Path to GC Roots" → "exclude weak references" →
+#       看到引用链: static → HashMap → ArrayList → byte[]
+#       → 确认 static 集合未清理
+```
+
+### 12.4 快速决策：OOM 怎么修？
+
+| 场景 | 判断方法 | 立即操作 | 长期方案 |
+|------|----------|----------|----------|
+| 真不够 | Dump 分析无异常大对象, 堆使用率持续 90%+ | 加大 `-Xmx` | 评估合理性 |
+| 内存泄漏 | `jstat` 老年代持续增长；Dump 见某对象数量异常 | 重启（治标） | MAT 分析 → 修代码 |
+| GC overhead | `jstat` Full GC 每秒一次 | 加大 `-Xmx` 或重启 | 修泄漏或堆太小 |
+| Metaspace | `jstat` MU 逼近 MC | `-XX:MaxMetaspaceSize=512M` | 减少动态类生成 |
+| 线程超限 | `jstack | wc -l` > 预期 | 缩小线程池 | 调整线程池参数 |
+| 容器 OOM | Exit Code 137 | 加 `MaxRAMPercentage=75` | 规范容器 JVM 参数 |
 
 ---
 
