@@ -48,10 +48,7 @@
 - [31. 每章速查卡片](#31-每章速查卡片)
 - [32. 互动思考题（含参考答案）](#32-互动思考题)
 
-### 第五部分：算法与设计模式
-- [33. 设计模式在 Spring 中的应用](#33-设计模式在-spring-中的应用)
-- [34. 关键算法在 Spring 中的实现](#34-关键算法在-spring-中的实现)
-- [35. 设计模式与算法总结速查](#35-设计模式与算法总结速查)
+### 第四部分：实战专家指南
 - [24. 设计哲学与架构意图](#24-设计哲学与架构意图)
 - [25. 常见坑与反模式](#25-常见坑与反模式)
 - [26. 调试与诊断实战](#26-调试与诊断实战)
@@ -62,7 +59,83 @@
 - [31. 每章速查卡片](#31-每章速查卡片)
 - [32. 互动思考题（含参考答案）](#32-互动思考题)
 
+### 第五部分：算法与设计模式
+- [33. 设计模式在 Spring 中的应用](#33-设计模式在-spring-中的应用)
+- [34. 关键算法在 Spring 中的实现](#34-关键算法在-spring-中的实现)
+- [35. 设计模式与算法总结速查](#35-设计模式与算法总结速查)
+
+### 第六部分：扩展生态 + 源码索引
+- [36. Spring Cloud 服务发现 — Nacos](#36-spring-cloud-服务发现--nacos)
+- [37. Spring Cloud 流量治理 — Sentinel](#37-spring-cloud-流量治理--sentinel)
+- [38. Spring Cloud Gateway 网关](#38-spring-cloud-gateway-网关)
+- [39. MyBatis 源码深度解析](#39-mybatis-源码深度解析)
+- [附录：核心类源码直链](#附录核心类源码直链)
+
+- [31. 每章速查卡片](#31-每章速查卡片)
+- [32. 互动思考题（含参考答案）](#32-互动思考题)
+
 ---
+
+- [39. MyBatis 源码深度解析](#39-mybatis-源码深度解析)
+
+
+## 0. 阅读导航：按目标选章节
+
+文档很长（35+ 章），不同目标读不同路径：
+
+### 🎯 面试突击（2-3 天）
+
+```mermaid
+flowchart LR
+    A["8. IoC 核心架构"] --> B["9. 循环依赖与三级缓存"]
+    B --> C["10. AOP 代理机制"]
+    C --> D["12. 事务管理"]
+    D --> E["24. 设计哲学 WHY"]
+    E --> F["25. 十大高频坑"]
+    F --> G["31. 速查卡片"]
+    G --> H["32. 思考题"]
+```
+
+| 顺序 | 章节 | 耗时 | 覆盖面试题 |
+|------|------|------|-----------|
+| 1 | [8. IoC 容器核心架构](#8-ioc-容器核心架构) | 30min | BeanFactory vs ApplicationContext |
+| 2 | [9. 循环依赖与三级缓存](#9-循环依赖与三级缓存) | 30min | ★ 最高频面试题 |
+| 3 | [10. AOP 代理机制](#10-aop-代理机制) | 30min | JDK Proxy vs CGLIB |
+| 4 | [12. 事务管理](#12-事务管理) | 30min | @Transactional 原理+失效 |
+| 5 | [24. 设计哲学与架构意图](#24-设计哲学与架构意图) | 30min | 为什么这样设计？ |
+| 6 | [25. 常见坑与反模式](#25-常见坑与反模式) | 20min | 实际踩坑经验 |
+| 7 | [31. 每章速查卡片](#31-每章速查卡片) | 10min | 快速过一遍 |
+| 8 | [32. 互动思考题](#32-互动思考题) | 20min | 自测 |
+
+### 🏗 架构设计（1 周）
+
+```mermaid
+flowchart LR
+    A["2. 启动流程"] --> B["3. 自动配置"]
+    B --> C["8-15. Spring 核心"]
+    C --> D["19. 自定义 Starter"]
+    D --> E["24. 设计哲学"]
+    E --> F["28. 最佳实践"]
+    F --> G["33-34. 模式+算法"]
+```
+
+从 [第 2 章](#2-springapplication-启动流程) 开始顺序读第一部分+第二部分，重点看 [24. 设计哲学](#24-设计哲学与架构意图) 和 [33. 设计模式](#33-设计模式在-spring-中的应用)。
+
+### 🔧 故障排查（随时查阅）
+
+| 问题 | 直接跳到 |
+|------|----------|
+| 启动报错 | [26. 调试与诊断实战](#26-调试与诊断实战) |
+| 自动配置不生效 | [26.2 ConditionEvaluationReport](#26-调试与诊断实战) |
+| 事务不生效 | [24.3 为什么自调用失效](#24-为什么-transactional-自调用失效) |
+| 循环依赖报错 | [9. 循环依赖与三级缓存](#9-循环依赖与三级缓存) |
+| 内存/OOM | [27. 性能优化指南](#27-性能优化指南) |
+| 迁移 Boot 2→3 | [30. 迁移指南](#30-spring-boot-2x--3x-迁移指南) |
+
+### 📚 完整学习（2-3 周）
+
+按目录顺序：第一部分 → 第二部分 → 第三部分 → 第四部分 → 第五部分 → 第六部分。
+
 
 ## 1. 总体架构概览
 
@@ -2543,15 +2616,13 @@ public abstract class CacheAspectSupport {
 
 ## 23. 文档全景导航
 
-| 部分 | 章节 | 核心内容 |
-|------|------|----------|
-| **第一部分** | 1-7 | Spring Boot 启动流程、自动配置、内嵌服务器、外部配置 |
-| **第二部分** | 8-15 | Spring IoC、循环依赖、AOP、MVC、事务、事件 |
-| **第三部分** | 16-22 | Actuator、JPA、Security、Starter、Test、异常、Cache |
-
----
-
-*全文基于 Spring Framework 6.x + Spring Boot 3.x + Spring Security 6.x 源码编写。*
+| 部分 | 章节 | 核心内容 | 适合读者 |
+|------|------|----------|----------|
+| **第一部分** | 1-7 | Spring Boot 启动流程、自动配置、内嵌服务器、外部配置 | 想快速理解 Spring Boot 原理 |
+| **第二部分** | 8-15 | Spring IoC、循环依赖、AOP、MVC、事务、事件 | 想深入 Spring Framework 核心 |
+| **第三部分** | 16-22 | Actuator、JPA、Security、Starter、Test、异常、Cache | 想掌握 Spring 生态组件 |
+| **第四部分** | 24-32 | 设计哲学、常见坑、调试、性能、最佳实践、3.x 新特性、迁移、速查卡、思考题 | 想从"会用"到"专家" |
+| **第五部分** | 33-35 | 10 种设计模式落地、6 个关键算法、速查总结 | 想理解 Spring 的设计智慧和面试高分 |
 
 ---
 
@@ -4071,3 +4142,365 @@ Spring Boot 在评估 `@Conditional` 时使用**短路求值**：一旦某个条
 | **算法** | 拓扑排序 | `AutoConfigurationSorter` | 确保有依赖的类后加载 |
 | **算法** | 通配符匹配 | `AntPathMatcher` | 分治递归匹配 URL 模式 |
 | **算法** | 泛型解析 | `ResolvableType` | 反向推导 Type Erasure 丢失的泛型信息 |
+
+---
+
+# 第六部分：扩展生态 + 源码索引
+
+---
+
+## 36. Spring Cloud 服务发现 — Nacos
+
+Nacos 是阿里巴巴开源的服务发现与配置中心，Spring Cloud Alibaba 将其深度集成。
+
+### 36.1 服务注册流程
+
+```mermaid
+sequenceDiagram
+    participant Provider as 服务提供者
+    participant NacosReg as NacosServiceRegistry
+    participant Server as Nacos Server
+    participant Consumer as 服务消费者
+    participant LB as Ribbon/LoadBalancer
+
+    Note over Provider: 应用启动
+    Provider->>NacosReg: register(instance)
+    NacosReg->>Server: PUT /nacos/v1/ns/instance
+    Note over Server: 服务名 + IP:Port + 元数据
+    Server-->>NacosReg: 注册成功
+    
+    Note over Provider: 定时 5s 心跳
+    loop 心跳保活
+        Provider->>Server: PUT /nacos/v1/ns/instance/beat
+    end
+    
+    Note over Consumer: 服务发现
+    Consumer->>Server: GET /nacos/v1/ns/instance/list?serviceName=order-service
+    Server-->>Consumer: [Instance1, Instance2, ...]
+    Consumer->>LB: Choose one instance
+    LB->>Provider: HTTP 调用
+```
+
+### 36.2 Nacos 配置中心刷新原理
+
+```java
+// Nacos 配置刷新核心链路
+// 1. 客户端启动时连接 Nacos Server
+// 2. 获取初始配置 → 写入 Environment
+// 3. 建立长轮询（Long Polling）监听配置变更
+// 4. 变更时 → 发布 RefreshEvent → @RefreshScope Bean 重建
+
+@RestController
+@RefreshScope  // ★ 配置变更时此 Bean 会重新创建
+public class ConfigController {
+    @Value("${app.timeout:5000}")
+    private int timeout;
+    
+    @GetMapping("/timeout")
+    public int getTimeout() { return timeout; }
+}
+```
+
+**长轮询 vs 推送 vs 短轮询**：
+
+| 机制 | 实时性 | 服务端压力 | Nacos 选择 |
+|------|--------|-----------|-----------|
+| 短轮询（每秒查） | 1s | 高 | ❌ |
+| **长轮询（30s 超时）** | 准实时 | 低 | ✅ |
+| WebSocket 推送 | 实时 | 中 | ❌（简单场景过重） |
+
+### 36.3 Spring Cloud 服务发现对比
+
+| 方案 | 一致性 | 健康检查 | 适用场景 |
+|------|--------|----------|----------|
+| **Nacos** | AP + CP 可切换 | HTTP/TCP/MySQL | 国内主流，配置+发现一体 |
+| Eureka | AP | 心跳 + 自我保护 | Netflix 生态，已停维 |
+| Consul | CP | HTTP/TCP/Script | 多数据中心 |
+| Kubernetes Service | — | Pod Ready | K8s 原生用户 |
+
+---
+
+## 37. Spring Cloud 流量治理 — Sentinel
+
+Sentinel 是阿里巴巴开源的流量治理组件，核心能力：**限流、熔断、降级**。
+
+### 37.1 核心架构
+
+```mermaid
+flowchart TB
+    Request["HTTP 请求"] --> Chain["SentinelWebInterceptor<br/>过滤器链插入"]
+    Chain --> Entry["SphU.entry(resourceName)<br/>申请进入资源"]
+    
+    Entry --> Check{"规则检查"}
+    Check -->|"QPS 超限"| Block["BlockException<br/>→ 限流响应"]
+    Check -->|"熔断打开"| Degrade["DegradeException<br/>→ 降级响应"]
+    Check -->|"通过"| Business["执行业务逻辑"]
+    
+    Business -->|"成功"| Exit["entry.exit()<br/>记录 RT + 成功"]
+    Business -->|"异常"| Trace["Tracer.trace(ex)<br/>记录异常比例"]
+```
+
+### 37.2 三种规则详解
+
+```java
+// 1. 限流规则（Flow Rule）
+// QPS 模式: 每秒最多 N 个请求
+// 线程数模式: 同时处理的线程数 ≤ N
+// 关联模式: 当资源 B 达到阈值，限流资源 A
+
+// 2. 熔断规则（Degrade Rule）
+// 慢调用比例: RT > maxRt 的请求 > 比例阈值 → 熔断
+// 异常比例: 异常数 / 总请求数 > 阈值 → 熔断
+// 异常数: 1 分钟内异常数 > 阈值 → 熔断
+
+// 3. 热点规则（Param Flow Rule）
+// 对某个参数值限流: userId=999 → QPS ≤ 100
+// 其他参数值不受影响
+
+// 4. 系统规则（System Rule）
+// Load、CPU、RT、线程数、入口 QPS → 系统级别保护
+```
+
+### 37.3 Sentinel vs Hystrix vs Resilience4j
+
+| 维度 | Sentinel | Hystrix | Resilience4j |
+|------|----------|---------|-------------|
+| 限流 | ✅ QPS/线程/关联/热点 | ❌ 无 | ✅ RateLimiter |
+| 熔断 | ✅ 慢调用/异常比例/异常数 | ✅ 基础熔断 | ✅ 自定义 |
+| 控制台 | ✅ 实时监控 + 规则推送 | ✅ Dashboard | ❌ 无 |
+| 规则持久化 | ✅ Nacos/Apollo/ZK | ❌ | ❌ |
+| 维护状态 | ✅ 活跃 | ❌ 停维 | ✅ 活跃 |
+
+---
+
+## 38. Spring Cloud Gateway 网关
+
+Spring Cloud Gateway 基于 **WebFlux + Netty**，非阻塞 I/O，性能远超 Zuul 1.x。
+
+### 38.1 核心处理流程
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant GW as Gateway
+    participant Predicate as 路由断言
+    participant Filters as 过滤器链
+    participant Service as 后端服务
+
+    Client->>GW: GET /api/users
+    GW->>Predicate: 匹配 Route
+    Note over Predicate: Path=/api/** → 路由到 user-service
+    GW->>Filters: 执行全局 Filter
+    Note over Filters: 限流 / 鉴权 / 日志
+    GW->>Filters: 执行路由 Filter
+    Note over Filters: 负载均衡 / URL 重写
+    GW->>Service: 转发请求
+    Service-->>GW: 响应
+    GW->>Filters: 后置 Filter
+    GW-->>Client: 响应
+```
+
+### 38.2 核心源码结构
+
+```java
+// Gateway 三大核心组件
+// 1. Route（路由）= id + uri + predicates + filters
+// 2. Predicate（断言）= 匹配条件（Path, Header, Method...）
+// 3. Filter（过滤器）= 请求前后处理
+
+// 典型配置:
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: user-service
+          uri: lb://user-service           # ★ 负载均衡
+          predicates:
+            - Path=/api/users/**            # ★ 路径匹配
+          filters:
+            - StripPrefix=1                 # ★ 去掉 /api
+            - name: RequestRateLimiter      # ★ 限流
+              args:
+                redis-rate-limiter.replenishRate: 100
+```
+
+### 38.3 Gateway vs Zuul vs Nginx
+
+| 维度 | Spring Cloud Gateway | Zuul 1.x | Nginx |
+|------|---------------------|----------|-------|
+| I/O 模型 | **异步非阻塞 Netty** | 同步阻塞 Servlet | 异步非阻塞 epoll |
+| 编程模型 | Java DSL / YAML | Java Filter | nginx.conf |
+| 动态路由 | ✅ 运行时修改 | ❌ 需重启 | ❌ 需 reload |
+| 与 Spring 集成 | ✅ 原生 | ✅ 原生 | ❌ |
+| 性能 | 高 | 低 | **最高** |
+
+---
+
+## 39. MyBatis 源码深度解析
+
+MyBatis 是 Java 最流行的 SQL 映射框架。它的核心是一个 **JDK 动态代理工厂**。
+
+### 39.1 Mapper 代理创建流程
+
+```mermaid
+sequenceDiagram
+    participant Container as Spring 容器
+    participant Scanner as MapperScannerConfigurer
+    participant Factory as MapperFactoryBean
+    participant SqlSess as SqlSessionTemplate
+    participant Executor as Executor
+    participant DB as 数据库
+
+    Container->>Scanner: 扫描 @MapperScan 包
+    Scanner->>Scanner: 发现 UserMapper 接口
+    Scanner->>Factory: 为每个接口注册 MapperFactoryBean
+    
+    Note over Container: 注入 UserMapper 时
+    Container->>Factory: getObject()
+    Factory->>Factory: getSqlSession().getMapper(UserMapper.class)
+    Note over Factory: ★ 创建 JDK 动态代理
+    
+    Note over Container: 调用 userMapper.findById(1)
+    Container->>Factory: proxy.invoke()
+    Factory->>SqlSess: selectOne("com.example.UserMapper.findById", 1)
+    SqlSess->>Executor: query(ms, param)
+    Executor->>DB: SELECT * FROM user WHERE id = 1
+    DB-->>Executor: ResultSet
+    Executor-->>Container: User 对象
+```
+
+### 39.2 MapperProxy 核心源码
+
+```java
+// MapperProxy.java — MyBatis 的 JDK 动态代理核心
+public class MapperProxy<T> implements InvocationHandler, Serializable {
+    
+    private final SqlSession sqlSession;
+    private final Class<T> mapperInterface;
+    
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        // Object 类的方法（toString/equals/hashCode）→ 直接执行
+        if (Object.class.equals(method.getDeclaringClass())) {
+            return method.invoke(this, args);
+        }
+        // ★ 接口方法 → 通过 SqlSession 执行 SQL
+        return mapperMethod.execute(sqlSession, args);
+    }
+}
+
+// MapperMethod.execute() 分发逻辑:
+public Object execute(SqlSession sqlSession, Object[] args) {
+    switch (command.getType()) {
+        case SELECT:
+            if (method.returnsMany())     return sqlSession.selectList(statement, param);
+            if (method.returnsMap())      return sqlSession.selectMap(statement, param);
+            return sqlSession.selectOne(statement, param);
+        case INSERT: return rowCountResult(sqlSession.insert(statement, param));
+        case UPDATE: return rowCountResult(sqlSession.update(statement, param));
+        case DELETE: return rowCountResult(sqlSession.delete(statement, param));
+    }
+}
+```
+
+### 39.3 MyBatis 插件拦截链 — 责任链模式
+
+```java
+// InterceptorChain — 所有插件组成一条责任链
+public class InterceptorChain {
+    private final List<Interceptor> interceptors = new ArrayList<>();
+    
+    // ★ 对 Executor、StatementHandler、ParameterHandler、ResultSetHandler 四种对象
+    //   逐层包装（动态代理），形成拦截链
+    public Object pluginAll(Object target) {
+        for (Interceptor interceptor : interceptors) {
+            target = interceptor.plugin(target);  // 层层包裹
+        }
+        return target;
+    }
+}
+
+// 分页插件 PageHelper 就是通过拦截 Executor.query() 实现的:
+@Intercepts(@Signature(type = Executor.class, method = "query", args = {...}))
+public class PageInterceptor implements Interceptor {
+    @Override
+    public Object intercept(Invocation invocation) throws Throwable {
+        // 1. 获取原始 SQL
+        // 2. 拼接 LIMIT ? OFFSET ?
+        // 3. 执行 COUNT 查询获取总数
+        // 4. 返回 PageInfo
+    }
+}
+```
+
+```mermaid
+flowchart LR
+    SQL["原始 SQL: SELECT * FROM user"] --> P1["拦截器1: PageHelper<br/>添加 LIMIT 10 OFFSET 0"]
+    P1 --> P2["拦截器2: 慢SQL监控<br/>记录执行时间"]
+    P2 --> P3["拦截器3: 加密插件<br/>解密查询结果"]
+    P3 --> DB["执行 SQL → 数据库"]
+```
+
+### 39.4 MyBatis 一级缓存 vs 二级缓存
+
+```mermaid
+flowchart TB
+    subgraph L1["一级缓存 — SqlSession 级别（默认开启）"]
+        L1Cache["PerpetualCache (HashMap)<br/>同一 SqlSession 内相同 SQL 只查一次"]
+    end
+    
+    subgraph L2["二级缓存 — Mapper 级别（需手动开启）"]
+        L2Cache["CachingExecutor 装饰 Executor<br/>跨 SqlSession 共享<br/>可对接 Redis / Ehcache"]
+    end
+    
+    Query["userMapper.findById(1)"] --> L1
+    L1 -->|"未命中"| L2
+    L2 -->|"未命中"| DB["查数据库"]
+    DB --> L2
+    L2 --> L1
+```
+
+**一级缓存失效场景**（面试高频）：
+- 不同 SqlSession
+- SqlSession 执行了 INSERT/UPDATE/DELETE（清空缓存）
+- 手动 `sqlSession.clearCache()`
+- Spring 集成时每次查询默认创建新 SqlSession（`SqlSessionTemplate`）
+
+### 39.5 MyBatis vs JPA 选型决策
+
+| 维度 | MyBatis | JPA / Hibernate |
+|------|---------|-----------------|
+| SQL 控制 | ✅ 手写 SQL，完全可控 | ❌ 自动生成，复杂场景需 JPQL |
+| 动态 SQL | ✅ `<if>` `<foreach>` 灵活 | ⚠️ Criteria API / Specification |
+| 对象映射 | 需手动映射 | ✅ 自动 ORM |
+| 缓存 | L1+L2，L2 需手动配 | L1+L2，配置更简单 |
+| 学习曲线 | 低（会 SQL 就会 MyBatis） | 高（需理解持久化上下文） |
+| 适用场景 | 复杂查询、报表、遗留数据库 | 标准 CRUD、对象模型驱动 |
+
+---
+
+## 附录：核心类源码直链
+
+| 类 | 仓库 | 链接 |
+|----|------|------|
+| `SpringApplication` | spring-boot | [GitHub](https://github.com/spring-projects/spring-boot/blob/main/spring-boot-project/spring-boot/src/main/java/org/springframework/boot/SpringApplication.java) |
+| `AutoConfigurationImportSelector` | spring-boot-autoconfigure | [GitHub](https://github.com/spring-projects/spring-boot/blob/main/spring-boot-project/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/AutoConfigurationImportSelector.java) |
+| `AbstractApplicationContext.refresh()` | spring-context | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-context/src/main/java/org/springframework/context/support/AbstractApplicationContext.java) |
+| `DefaultListableBeanFactory` | spring-beans | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultListableBeanFactory.java) |
+| `DefaultSingletonBeanRegistry` | spring-beans | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultSingletonBeanRegistry.java) |
+| `AbstractAutowireCapableBeanFactory` | spring-beans | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-beans/src/main/java/org/springframework/beans/factory/support/AbstractAutowireCapableBeanFactory.java) |
+| `AbstractAutoProxyCreator` | spring-aop | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-aop/src/main/java/org/springframework/aop/framework/autoproxy/AbstractAutoProxyCreator.java) |
+| `ReflectiveMethodInvocation` | spring-aop | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-aop/src/main/java/org/springframework/aop/framework/ReflectiveMethodInvocation.java) |
+| `DispatcherServlet` | spring-webmvc | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-webmvc/src/main/java/org/springframework/web/servlet/DispatcherServlet.java) |
+| `TransactionInterceptor` | spring-tx | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-tx/src/main/java/org/springframework/transaction/interceptor/TransactionInterceptor.java) |
+| `TransactionSynchronizationManager` | spring-tx | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-tx/src/main/java/org/springframework/transaction/support/TransactionSynchronizationManager.java) |
+| `SimpleApplicationEventMulticaster` | spring-context | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-context/src/main/java/org/springframework/context/event/SimpleApplicationEventMulticaster.java) |
+| `CacheInterceptor` | spring-context | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-context/src/main/java/org/springframework/cache/interceptor/CacheInterceptor.java) |
+| `ConfigurationClassPostProcessor` | spring-context | [GitHub](https://github.com/spring-projects/spring-framework/blob/main/spring-context/src/main/java/org/springframework/context/annotation/ConfigurationClassPostProcessor.java) |
+| `SimpleJpaRepository` | spring-data-jpa | [GitHub](https://github.com/spring-projects/spring-data-jpa/blob/main/spring-data-jpa/src/main/java/org/springframework/data/jpa/repository/support/SimpleJpaRepository.java) |
+| `MapperProxy` (MyBatis) | mybatis | [GitHub](https://github.com/mybatis/mybatis-3/blob/master/src/main/java/org/apache/ibatis/binding/MapperProxy.java) |
+| `PageInterceptor` (PageHelper) | pagehelper | [GitHub](https://github.com/pagehelper/Mybatis-PageHelper/blob/master/src/main/java/com/github/pagehelper/PageInterceptor.java) |
+
+---
+
+*全文 39 章 + 附录，六大部分，基于 Spring Framework 6.x + Spring Boot 3.x + Spring Security 6.x + Spring Cloud + MyBatis 3.x 源码编写。*
