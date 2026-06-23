@@ -3381,7 +3381,7 @@ rewrite {
 
 ---
 
-*全文 32 章，基于 Spring Framework 6.x + Spring Boot 3.x + Spring Security 6.x 源码编写。*
+*全文 35 章，五大部分，基于 Spring Framework 6.x + Spring Boot 3.x + Spring Security 6.x 源码编写。*
 
 ---
 
