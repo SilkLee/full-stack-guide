@@ -1102,7 +1102,7 @@ sequenceDiagram
 
         alt singleton
             BF->>Cache: getSingleton with ObjectFactory
-            Cache->>Create: createBean
+            Cache->>Create: build new Bean instance
             Create->>Create: doCreateBean
 
             Note over Create: 5.1 创建实例
@@ -1126,7 +1126,7 @@ sequenceDiagram
             Cache->>Cache: addSingleton - 放入 L1, 移除 L2/L3
             Cache-->>BF: Bean 实例
         else prototype
-            BF->>Create: createBean 每次新建
+            BF->>Create: new Bean instance 每次新建
         end
 
         BF-->>User: Bean 实例
