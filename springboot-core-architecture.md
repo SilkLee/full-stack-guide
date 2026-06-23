@@ -1098,36 +1098,31 @@ sequenceDiagram
         Note over BF: 4. 检查依赖关系 @DependsOn
         BF->>BF: 递归创建依赖的 Bean
 
-        Note over BF: 5. 按 scope 创建
+        Note over BF: 5. 按 scope singleton 创建
+        BF->>Cache: getSingleton with ObjectFactory
+        Cache->>Create: build new Bean instance
+        Create->>Create: doCreateBean
 
-        alt singleton
-            BF->>Cache: getSingleton with ObjectFactory
-            Cache->>Create: build new Bean instance
-            Create->>Create: doCreateBean
+        Note over Create: 5.1 创建实例
+        Create->>CI: instantiateBean - 反射/CGLIB
 
-            Note over Create: 5.1 创建实例
-            Create->>CI: instantiateBean - 反射/CGLIB
+        Note over Create: 5.2 合并 BeanDefinition
+        Create->>Create: applyMergedBeanDefinitionPostProcessors
 
-            Note over Create: 5.2 合并 BeanDefinition
-            Create->>Create: applyMergedBeanDefinitionPostProcessors
+        Note over Create: 5.3 提前暴露引用-解决循环依赖
+        Create->>Cache: addSingletonFactory
+        Note over Cache: ObjectFactory - 放入 L3 缓存
 
-            Note over Create: 5.3 ★提前暴露引用-解决循环依赖
-            Create->>Cache: addSingletonFactory
-            Note over Cache: ObjectFactory → 放入 L3 缓存
+        Note over Create: 5.4 属性填充
+        Create->>Create: populateBean - Autowired 注入
 
-            Note over Create: 5.4 属性填充
-            Create->>Create: populateBean - @Autowired 注入
+        Note over Create: 5.5 初始化
+        Create->>Create: initializeBean
+        Note over Create: Aware - BP.before - init - BP.after
 
-            Note over Create: 5.5 初始化
-            Create->>Create: initializeBean
-            Note over Create: Aware → BP.before → init → BP.after
-
-            Create-->>Cache: Bean 实例
-            Cache->>Cache: addSingleton - 放入 L1, 移除 L2/L3
-            Cache-->>BF: Bean 实例
-        else prototype
-            BF->>Create: new Bean instance 每次新建
-        end
+        Create-->>Cache: Bean 实例
+        Cache->>Cache: addSingleton - 放入 L1, 移除 L2/L3
+        Cache-->>BF: Bean 实例
 
         BF-->>User: Bean 实例
     end
