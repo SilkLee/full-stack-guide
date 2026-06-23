@@ -48,6 +48,20 @@
 - [31. 每章速查卡片](#31-每章速查卡片)
 - [32. 互动思考题（含参考答案）](#32-互动思考题)
 
+### 第五部分：算法与设计模式
+- [33. 设计模式在 Spring 中的应用](#33-设计模式在-spring-中的应用)
+- [34. 关键算法在 Spring 中的实现](#34-关键算法在-spring-中的实现)
+- [35. 设计模式与算法总结速查](#35-设计模式与算法总结速查)
+- [24. 设计哲学与架构意图](#24-设计哲学与架构意图)
+- [25. 常见坑与反模式](#25-常见坑与反模式)
+- [26. 调试与诊断实战](#26-调试与诊断实战)
+- [27. 性能优化指南](#27-性能优化指南)
+- [28. 最佳实践与选型决策](#28-最佳实践与选型决策)
+- [29. Spring Boot 3.x 新特性](#29-spring-boot-3x-新特性)
+- [30. Spring Boot 2.x → 3.x 迁移指南](#30-spring-boot-2x--3x-迁移指南)
+- [31. 每章速查卡片](#31-每章速查卡片)
+- [32. 互动思考题（含参考答案）](#32-互动思考题)
+
 ---
 
 ## 1. 总体架构概览
@@ -3368,3 +3382,692 @@ rewrite {
 ---
 
 *全文 32 章，基于 Spring Framework 6.x + Spring Boot 3.x + Spring Security 6.x 源码编写。*
+
+---
+
+# 第五部分：算法与设计模式
+
+> Spring 不只是一个框架——它是一本**活的设计模式教科书**。本节逐一拆解 Spring 中实际使用的经典模式和算法，讲清楚"用在哪里、为什么选它、怎么实现的"。
+
+---
+
+## 33. 设计模式在 Spring 中的应用
+
+### 33.1 模板方法模式 — Template Method
+
+**使用位置**：`AbstractApplicationContext.refresh()`、`AbstractBeanFactory.getBean()`、`AbstractAutowireCapableBeanFactory.createBean()`
+
+**为什么选它？** Spring 有大量流程固定但步骤可变的操作（如容器初始化 12 步）。模板方法让你把"不变的骨架"写死在父类，把"可变的细节"留给子类。
+
+```java
+// AbstractApplicationContext.java — 骨架固定，步骤可变
+public abstract class AbstractApplicationContext implements ConfigurableApplicationContext {
+    
+    public void refresh() throws BeansException {       // ← 模板方法（final，不可覆盖）
+        prepareRefresh();          // 1. 步骤可覆盖 → protected
+        ConfigurableListableBeanFactory beanFactory = obtainFreshBeanFactory(); // 2
+        prepareBeanFactory(beanFactory);     // 3
+        postProcessBeanFactory(beanFactory); // 4 ★子类扩展
+        invokeBeanFactoryPostProcessors(beanFactory); // 5
+        registerBeanPostProcessors(beanFactory);       // 6
+        initMessageSource();         // 7
+        initApplicationEventMulticaster(); // 8
+        onRefresh();                 // 9 ★子类扩展
+        registerListeners();         // 10
+        finishBeanFactoryInitialization(beanFactory); // 11
+        finishRefresh();            // 12
+    }
+    
+    protected abstract void postProcessBeanFactory(ConfigurableListableBeanFactory bf);
+    protected void onRefresh() throws BeansException {} // 默认空实现
+}
+
+// GenericApplicationContext — 不重写 obtainFreshBeanFactory
+// AbstractRefreshableApplicationContext — 重写 obtainFreshBeanFactory 支持多次刷新
+```
+
+```mermaid
+flowchart TD
+    Parent["AbstractApplicationContext<br/>refresh() = 模板方法<br/>每个步骤 = protected 钩子"]
+    
+    Child1["GenericApplicationContext<br/>onRefresh() 空实现<br/>（非 Web 场景）"]
+    Child2["ServletWebServerApplicationContext<br/>onRefresh() = 创建内嵌 Tomcat"]
+    Child3["ReactiveWebServerApplicationContext<br/>onRefresh() = 创建 Netty"]
+    
+    Parent --> Child1
+    Parent --> Child2
+    Parent --> Child3
+```
+
+**Spring 中模板方法模式的完整清单**：
+
+| 类 | 模板方法 | 子类覆盖的步骤 |
+|----|----------|--------------|
+| `AbstractApplicationContext` | `refresh()` | `postProcessBeanFactory()`、`onRefresh()` |
+| `AbstractBeanFactory` | `getBean()` → `doGetBean()` | `createBean()`、`getObjectForBeanInstance()` |
+| `AbstractAutowireCapableBeanFactory` | `createBean()` → `doCreateBean()` | `createBeanInstance()`、`populateBean()`、`initializeBean()` |
+| `AbstractPlatformTransactionManager` | `commit()` / `rollback()` | `doCommit()`、`doRollback()`、`doBegin()` |
+| `JdbcTemplate` | `execute()`、`query()` | 回调模式组合使用 |
+
+### 33.2 工厂方法模式 + 抽象工厂 — Factory Method + Abstract Factory
+
+**使用位置**：`FactoryBean<T>`、`ObjectFactory<T>`、`BeanFactory`
+
+**为什么选它？** 有些对象不能（或不应）直接 `new`——如 MyBatis Mapper 接口、Feign Client 接口、AOP 代理对象。工厂方法把"创建逻辑"封装起来。
+
+```java
+// 标准工厂方法
+public interface FactoryBean<T> {
+    T getObject() throws Exception;  // ★ 工厂方法：创建对象
+    Class<?> getObjectType();        // 返回类型
+    default boolean isSingleton() { return true; }
+}
+
+// MyBatis 集成：Mapper 接口没有实现类，靠工厂方法创建 JDK 动态代理
+public class MapperFactoryBean<T> extends SqlSessionDaoSupport implements FactoryBean<T> {
+    @Override
+    public T getObject() {
+        return getSqlSession().getMapper(this.mapperInterface);  // ★ JDK 动态代理
+    }
+}
+
+// Feign 集成：同样靠 FactoryBean 创建代理
+class FeignClientFactoryBean implements FactoryBean<Object> {
+    @Override
+    public Object getObject() {
+        return Feign.builder().target(target, url);  // Feign 动态代理
+    }
+}
+```
+
+```mermaid
+flowchart TB
+    subgraph User["用户侧"]
+        U["@Autowired UserMapper mapper"]
+    end
+    
+    subgraph Spring["Spring 容器"]
+        FB["MapperFactoryBean&lt;UserMapper&gt;"]
+        BF["BeanFactory.getBean"]
+    end
+    
+    subgraph Product["产物"]
+        Proxy["UserMapper 的 JDK 动态代理"]
+    end
+    
+    U --> BF
+    BF -->|"检测到 FactoryBean"| FB
+    BF -->|"调用 getObject()"| FB
+    FB -->|"创建代理"| Proxy
+    BF -->|"返回代理对象"| U
+```
+
+**特殊规则**：`getBean("&beanName")` 返回 `FactoryBean` 本身而非其产物。`&` 前缀是 Spring 专门设计的"转义符"。
+
+### 33.3 单例模式 — Singleton（注册表变体）
+
+**使用位置**：`DefaultSingletonBeanRegistry` 的 L1/L2/L3 缓存
+
+**为什么选它？** Spring 不是简单的饿汉/懒汉单例，而是**注册表式单例**：用一个 `ConcurrentHashMap` 维护所有单例，按名存取。
+
+```java
+public class DefaultSingletonBeanRegistry {
+    // ★ 注册表：所有单例存在这里
+    private final Map<String, Object> singletonObjects = new ConcurrentHashMap<>(256);
+    
+    // 注册单例
+    public void registerSingleton(String beanName, Object singletonObject) {
+        synchronized (this.singletonObjects) {
+            Object oldObject = this.singletonObjects.get(beanName);
+            if (oldObject != null) {
+                throw new IllegalStateException("单例已存在: " + beanName);
+            }
+            this.singletonObjects.put(beanName, singletonObject);
+        }
+    }
+    
+    // 获取单例
+    public Object getSingleton(String beanName) {
+        return this.singletonObjects.get(beanName);
+    }
+}
+```
+
+```mermaid
+flowchart LR
+    subgraph Registry["DefaultSingletonBeanRegistry — 注册表"]
+        R1["singletonObjects: ConcurrentHashMap"]
+        R2["singletonFactories: HashMap"]
+        R3["earlySingletonObjects: HashMap"]
+        R4["registeredSingletons: LinkedHashSet"]
+    end
+    
+    subgraph Compare["相对于经典单例的改进"]
+        C1["经典: 一个类一个实例<br/>Spring: 一个 name 一个实例"]
+        C2["经典: private 构造器<br/>Spring: 外部注入构造器"]
+        C3["经典: 无法延迟创建<br/>Spring: ObjectFactory 延迟"]
+    end
+```
+
+**与经典单例的本质区别**：
+
+| 维度 | GoF 单例模式 | Spring 注册表单例 |
+|------|-------------|------------------|
+| 作用域 | 每个 ClassLoader 一个 | 每个容器一个（可多个容器） |
+| 生命周期 | 无法销毁 | `destroy()` 支持销毁回调 |
+| 多实例 | 不支持 | 同一 Class 可注册多个不同 name 的单例 |
+| 线程安全 | 自己保证 | `ConcurrentHashMap` 天然保证 |
+
+### 33.4 代理模式 — Proxy
+
+**使用位置**：`JdkDynamicAopProxy`、`CglibAopProxy`、`AbstractAutoProxyCreator`
+
+**为什么选它？** AOP 的核心就是代理模式——在不修改原对象的前提下，增加横切逻辑。
+
+```java
+// 代理模式经典结构
+public interface Subject { void request(); }       // 抽象主题
+public class RealSubject implements Subject { ... } // 真实主题
+public class Proxy implements Subject {             // 代理
+    private RealSubject real;
+    public void request() {
+        before();          // ★ 前置增强
+        real.request();    //   委托给真实对象
+        after();           // ★ 后置增强
+    }
+}
+```
+
+```mermaid
+flowchart TB
+    Client["调用方"] --> Proxy["代理对象<br/>JdkDynamicAopProxy / CglibAopProxy"]
+    Proxy -->|"方法执行前"| Before["@Before 通知"]
+    Proxy -->|"委托"| Target["目标 Bean"]
+    Proxy -->|"方法执行后"| After["@After 通知"]
+    Proxy -->|"异常时"| Throws["@AfterThrowing 通知"]
+    
+    Proxy -.->|"包裹"| Around["@Around 通知<br/>（包围整个调用）"]
+```
+
+**Spring 代理模式的两个变体**：
+
+```java
+// 变体 1: JDK 动态代理（基于接口）
+public class JdkDynamicAopProxy implements AopProxy, InvocationHandler {
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        // 获取拦截器链
+        List<Object> chain = this.advised.getInterceptorsAndDynamicInterceptionAdvice(method, targetClass);
+        // 创建 ReflectiveMethodInvocation → 执行链
+        MethodInvocation invocation = new ReflectiveMethodInvocation(proxy, target, method, args, targetClass, chain);
+        return invocation.proceed();
+    }
+}
+
+// 变体 2: CGLIB 代理（基于继承）
+public class CglibAopProxy implements AopProxy {
+    // Enhancer.create() → 动态生成 RealSubject 的子类
+    // 在子类的每个方法中插入拦截逻辑
+}
+```
+
+### 33.5 观察者模式 — Observer
+
+**使用位置**：`ApplicationListener`、`ApplicationEventMulticaster`、`@EventListener`
+
+**为什么选它？** 容器启动于多阶段（starting → prepared → started → ready），各组件需要在特定阶段做初始化。观察者模式让"事件发布者"和"事件处理者"解耦。
+
+```java
+// Spring 事件三要素
+// 1. 事件（继承 ApplicationEvent）
+public class OrderCreatedEvent extends ApplicationEvent {
+    private final Order order;
+    public OrderCreatedEvent(Object source, Order order) {
+        super(source);
+        this.order = order;
+    }
+}
+
+// 2. 发布者（注入 ApplicationEventPublisher）
+@Service
+public class OrderService {
+    @Autowired private ApplicationEventPublisher publisher;
+    
+    public void createOrder(Order order) {
+        orderRepo.save(order);
+        publisher.publishEvent(new OrderCreatedEvent(this, order));  // ★ 发布
+    }
+}
+
+// 3. 监听者（@EventListener 注解）
+@Component
+public class OrderEventListener {
+    @EventListener
+    public void onOrderCreated(OrderCreatedEvent event) {
+        // 收到事件，异步发邮件
+    }
+}
+```
+
+```mermaid
+sequenceDiagram
+    participant Publisher as OrderService<br/>事件发布者
+    participant MC as ApplicationEventMulticaster<br/>事件广播器
+    participant L1 as EmailListener<br/>观察者 1
+    participant L2 as AuditListener<br/>观察者 2
+    participant L3 as AnalyticsListener<br/>观察者 3
+
+    Publisher->>MC: publishEvent(OrderCreatedEvent)
+    MC->>MC: getApplicationListeners(event) 匹配监听器
+    MC->>L1: onApplicationEvent(event)
+    MC->>L2: onApplicationEvent(event)
+    MC->>L3: onApplicationEvent(event)
+```
+
+**Spring 对经典观察者模式的增强**：
+- 支持**泛型事件匹配**（`@EventListener` 通过参数类型自动匹配）
+- 支持**异步观察者**（设置 `TaskExecutor`）
+- 支持**事务感知观察者**（`@TransactionalEventListener` 在事务提交后触发）
+
+### 33.6 责任链模式 — Chain of Responsibility
+
+**使用位置**：Spring Security `SecurityFilterChain`、AOP `MethodInterceptor` 链、Servlet `Filter` 链
+
+**为什么选它？** Servlet 规范本身就是责任链（Filter Chain）。Spring 在此基础上扩展：Security 用 15 个 Filter 组成专门的链，AOP 用多个 Interceptor 组成链。
+
+```java
+// AOP 拦截器链：每个拦截器自己决定是否"放行"
+public class ReflectiveMethodInvocation implements ProxyMethodInvocation {
+    private final List<?> interceptors;     // 拦截器链
+    private int currentIndex = -1;          // 当前位置
+    
+    public Object proceed() throws Throwable {
+        // 到达链尾 → 执行目标方法
+        if (this.currentIndex == this.interceptors.size() - 1) {
+            return invokeJoinpoint();
+        }
+        // ★ 获取下一个拦截器，将 this（当前 Invocation）传给它
+        Object interceptor = this.interceptors.get(++this.currentIndex);
+        return ((MethodInterceptor) interceptor).invoke(this);
+        // ★ 拦截器内部调用 this.proceed() → 进入下一个拦截器
+    }
+}
+```
+
+```mermaid
+flowchart LR
+    Request["请求"] --> F1["拦截器 1<br/>@Before 日志"]
+    F1 -->|"proceed()"| F2["拦截器 2<br/>@Around 事务"]
+    F2 -->|"proceed()"| F3["拦截器 3<br/>@After 缓存"]
+    F3 -->|"proceed()"| Target["目标方法"]
+    Target --> F3
+    F3 --> F2
+    F2 --> F1
+    F1 --> Response["响应"]
+```
+
+**责任链模式的优势**：
+- 每个拦截器**独立**：增删拦截器不影响其他
+- **顺序可控**：`@Order` 注解控制优先级
+- **可中断**：Security Filter 返回 403 可中断后续 Filter
+
+### 33.7 策略模式 — Strategy
+
+**使用位置**：`InstantiationStrategy`、`CacheManager`、`ProxyFactory`（JDK vs CGLIB 选择）
+
+**为什么选它？** Spring 需要在运行时根据条件选择不同的实现。用 `if-else` 写死所有分支不可扩展；用策略模式，新增方案只需新增一个类。
+
+```java
+// 策略接口
+public interface InstantiationStrategy {
+    Object instantiate(RootBeanDefinition bd, String beanName, BeanFactory owner);
+}
+
+// 策略 1: 反射
+public class SimpleInstantiationStrategy implements InstantiationStrategy {
+    public Object instantiate(...) {
+        return beanClass.getDeclaredConstructor().newInstance();  // 反射
+    }
+}
+
+// 策略 2: CGLIB
+public class CglibSubclassingInstantiationStrategy extends SimpleInstantiationStrategy {
+    public Object instantiate(...) {
+        if (bd.getMethodOverrides().isEmpty()) {
+            return super.instantiate(...);  // 无方法覆写 → 回退到反射
+        }
+        return enhancer.create();           // 有方法覆写 → CGLIB 子类化
+    }
+}
+
+// 上下文：AbstractAutowireCapableBeanFactory 在运行时选择策略
+// strategy = new CglibSubclassingInstantiationStrategy() （默认）
+```
+
+```mermaid
+flowchart TB
+    Context["AbstractAutowireCapableBeanFactory<br/>持有 InstantiationStrategy 引用"]
+    
+    Context --> Q{"Bean 有 MethodOverride?"}
+    Q -->|"无"| S1["SimpleInstantiationStrategy<br/>反射创建"]
+    Q -->|"有"| S2["CglibSubclassingInstantiationStrategy<br/>CGLIB 子类化"]
+    
+    Context -->|"Cache 层"| Q2{"选择 CacheManager"}
+    Q2 -->|"单机"| C1["ConcurrentMapCacheManager"]
+    Q2 -->|"分布式"| C2["RedisCacheManager"]
+    Q2 -->|"高性能单机"| C3["CaffeineCacheManager"]
+```
+
+### 33.8 装饰器模式 — Decorator
+
+**使用位置**：`BeanPostProcessor` 链、"包装"式增强
+
+**为什么选它？** 代理模式和装饰器模式都"包裹"对象，关键区别：代理模式**控制访问**，装饰器模式**添加功能**。Spring 的 `BeanPostProcessor` 链是装饰器模式——每个 `BeanPostProcessor` 在 Bean 初始化前后"添加"功能，层层叠加但不改变接口。
+
+```java
+// 装饰过程（伪代码表示层层包裹）
+// postProcessBeforeInitialization:
+//   原始 Bean → AutowiredAnnotationBeanPostProcessor（添加注入）→ 
+//   CommonAnnotationBeanPostProcessor（添加 @PostConstruct）→
+//   ApplicationContextAwareProcessor（注入 ApplicationContext）→
+//   装饰后的 Bean
+
+// postProcessAfterInitialization:
+//   AbstractAutoProxyCreator（检测是否需要 AOP → 如果需要，装饰为代理）→
+//   最终返回（可能是代理，也可能是原始 Bean）
+```
+
+```mermaid
+flowchart LR
+    Raw["原始 Bean"] --> BPP1["AutowiredAnnotationBeanPostProcessor<br/>装饰: @Autowired 解析"]
+    BPP1 --> BPP2["CommonAnnotationBeanPostProcessor<br/>装饰: @PostConstruct"]
+    BPP2 --> BPP3["AbstractAutoProxyCreator<br/>装饰: AOP 代理创建"]
+    BPP3 --> Final["最终 Bean<br/>原始 + 三层功能叠加"]
+```
+
+### 33.9 适配器模式 — Adapter
+
+**使用位置**：`HandlerAdapter`（Spring MVC）、`JpaVendorAdapter`
+
+**为什么选它？** DispatcherServlet 需要调用各种类型的 Handler（`@Controller`、`HttpRequestHandler`、`Servlet`），它们的接口各不相同。`HandlerAdapter` 把各种 Handler 统一为 `ModelAndView handle(request, response, handler)`。
+
+```java
+public interface HandlerAdapter {
+    boolean supports(Object handler);     // "你能处理这个 Handler 吗？"
+    ModelAndView handle(HttpServletRequest req, HttpServletResponse res, Object handler) throws Exception;
+}
+
+// 适配器 1: 处理 @RequestMapping 注解的方法
+class RequestMappingHandlerAdapter implements HandlerAdapter {
+    public boolean supports(Object handler) { return handler instanceof HandlerMethod; }
+    // ...
+}
+
+// 适配器 2: 处理实现 HttpRequestHandler 的类
+class HttpRequestHandlerAdapter implements HandlerAdapter {
+    public boolean supports(Object handler) { return handler instanceof HttpRequestHandler; }
+    // ...
+}
+```
+
+### 33.10 前端控制器模式 — Front Controller
+
+**使用位置**：`DispatcherServlet`
+
+**为什么选它？** 在传统 Servlet 中，每个请求映射到一个 Servlet（1:1 映射）。Spring MVC 用一个 `DispatcherServlet` 接收所有请求，然后分发到具体的 Handler（1:N 映射）。这是"前端控制器"模式——统一的入口点处理公共逻辑（安全、日志、编码）。
+
+```mermaid
+flowchart LR
+    subgraph Traditional["传统 Servlet"]
+        T1["/users → UserServlet"]
+        T2["/orders → OrderServlet"]
+        T3["/products → ProductServlet"]
+    end
+    
+    subgraph SpringMVC["Spring MVC 前端控制器"]
+        S1["/*"]
+        S2["DispatcherServlet<br/>统一入口<br/>▼ 分发 ▼"]
+        S3["HandlerMapping<br/>→ /users → UserController<br/>→ /orders → OrderController<br/>→ /products → ProductController"]
+    end
+    
+    Traditional -.->|"N 个 Servlet → 1 个 DispatcherServlet"| SpringMVC
+```
+
+---
+
+## 34. 关键算法在 Spring 中的实现
+
+### 34.1 三级缓存查找算法 — getSingleton()
+
+```java
+// DefaultSingletonBeanRegistry.getSingleton(beanName, allowEarlyReference)
+// 算法：三级缓存逐级查找，一旦命中就"升级"
+//
+// 伪代码:
+// function getSingleton(beanName, allowEarly):
+//    obj = L1.get(beanName)           // O(1)
+//    if obj != null: return obj
+//    if not isCurrentlyInCreation:    // 短路：不在创建中就不用查 L2/L3
+//        return null
+//    obj = L2.get(beanName)           // O(1)
+//    if obj != null: return obj
+//    if not allowEarly:               // 短路：不允许提前暴露
+//        return null
+//    factory = L3.get(beanName)       // O(1)
+//    if factory != null:
+//        obj = factory.getObject()    // ★ 调用 lambda，可能触发 AOP
+//        L2.put(beanName, obj)        // 升级到 L2
+//        L3.remove(beanName)          // 从 L3 移除
+//    return obj
+```
+
+```mermaid
+flowchart TD
+    Start["getSingleton(beanName)"] --> L1{"L1 有吗?"}
+    L1 -->|"有"| ReturnL1["返回 L1 完整 Bean"]
+    L1 -->|"无"| Check{"beanName 正在创建中?"}
+    Check -->|"否（短路）"| ReturnNull["返回 null"]
+    Check -->|"是"| L2{"L2 有吗?"}
+    L2 -->|"有"| ReturnL2["返回 L2 早期引用"]
+    L2 -->|"无"| Allow{"allowEarlyReference?"}
+    Allow -->|"否（短路）"| ReturnNull2["返回 null"]
+    Allow -->|"是"| L3{"L3 有 factory 吗?"}
+    L3 -->|"有"| Invoke["调用 factory.getObject()"]
+    L3 -->|"无"| ReturnNull3["返回 null"]
+    Invoke --> Upgrade["升级到 L2，移除 L3"]
+    Upgrade --> ReturnEarly["返回早期引用"]
+```
+
+**时间复杂度**：每一步都是 `HashMap.get()` → O(1)。整个查找最多 3 次 Map 查询 + 1 次 lambda 调用。
+
+### 34.2 自动配置类拓扑排序 — Topological Sort
+
+`AutoConfigurationSorter` 在加载自动配置类后，根据 `@AutoConfigureAfter` 和 `@AutoConfigureBefore` 进行拓扑排序。
+
+```java
+// 问题: 类 A 依赖类 B 先加载，类 B 依赖类 C，类 C 无依赖。
+//       求正确的加载顺序。
+
+// 输入: A = {after=[B]}, B = {after=[C]}, C = {after=[]}
+// 拓扑排序结果: [C, B, A]  // C 先加载，B 在 C 后，A 最后
+```
+
+```mermaid
+flowchart TD
+    subgraph Graph["依赖图"]
+        C["C（无依赖）"]
+        B["B（after C）"]
+        A["A（after B）"]
+        D["D（after A, B）"]
+        E["E（无依赖）"]
+    end
+    
+    C --> B
+    B --> A
+    A --> D
+    B --> D
+    
+    subgraph Result["拓扑排序结果"]
+        R["加载顺序: C, E, B, A, D"]
+    end
+```
+
+**算法核心**：
+```java
+// 简化版实现思路
+public List<String> sortByAfterAnnotation(Map<String, List<String>> afterMap) {
+    Map<String, Integer> inDegree = new HashMap<>();  // 入度表
+    Queue<String> queue = new LinkedList<>();
+    
+    // 1. 计算每个类的入度
+    for (String className : afterMap.keySet()) {
+        inDegree.putIfAbsent(className, 0);
+        for (String after : afterMap.get(className)) {
+            inDegree.merge(after, 1, Integer::sum);  // after 必须在前
+        }
+    }
+    
+    // 2. 入度为 0 的入队
+    for (Map.Entry<String, Integer> e : inDegree.entrySet()) {
+        if (e.getValue() == 0) queue.offer(e.getKey());
+    }
+    
+    // 3. BFS 拓扑排序
+    List<String> result = new ArrayList<>();
+    while (!queue.isEmpty()) {
+        String node = queue.poll();
+        result.add(node);
+        for (String after : afterMap.getOrDefault(node, Collections.emptyList())) {
+            inDegree.merge(after, -1, Integer::sum);
+            if (inDegree.get(after) == 0) queue.offer(after);
+        }
+    }
+    return result;
+}
+```
+
+### 34.3 AntPathMatcher — 路径模式匹配
+
+Spring MVC 用 `AntPathMatcher` 匹配 URL 路径模式，底层是**通配符匹配算法**。
+
+```java
+// 路径模式                   匹配的 URL
+// /users/*                  /users/123        (* 匹配一层)
+// /users/**                 /users/123/orders (** 匹配多层)
+// /users/{id}               /users/123        ({id} 路径变量)
+// /users/{id:[0-9]+}        /users/123        (正则约束)
+// /api/v?                   /api/v1           (? 匹配单字符)
+```
+
+**匹配算法核心**：
+```java
+// AntPathMatcher.doMatch() — 递归分治匹配
+// 策略：将 pattern 和 path 分别按 "/" 分割成 token 数组
+//       对每个 token 逐一匹配，遇到 ** 递归处理
+
+// 伪代码:
+// function matchTokens(patternTokens, pathTokens):
+//    pStart = 0, pEnd = patternTokens.length
+//    if pStart == pEnd:
+//        return pathTokens.length == 0
+//    
+//    // 处理 **: 匹配零个或多个路径层级
+//    if patternTokens[pStart] == "**":
+//        while (true):
+//            if matchTokens(patternTokens[pStart+1..], pathTokens[i..]):
+//                return true
+//            i++
+//    
+//    // 处理普通 token: 字面匹配或 {variable}
+//    if patternTokens[pStart] is variable:
+//        提取变量值
+//    else if patternTokens[pStart] != pathTokens[pStart]:
+//        return false
+//    
+//    return matchTokens(patternTokens[pStart+1..], pathTokens[1..])
+```
+
+### 34.4 Condition 评估的短路优化
+
+Spring Boot 在评估 `@Conditional` 时使用**短路求值**：一旦某个条件不满足，后续条件不再评估。
+
+```java
+// AutoConfigurationImportSelector.filter()
+// 对每个自动配置类，评估其 @ConditionalOnClass、@ConditionalOnBean 等
+// 使用短路策略：OnClassCondition 先于 OnBeanCondition
+
+// 评估流程:
+// 1. OnClassCondition → 如果 class 缺失，直接排除（不查 Bean，因为 Bean 依赖 Class）
+// 2. OnBeanCondition → 在确认 Class 存在后才查 Bean
+// 3. OnPropertyCondition → 检查配置属性
+
+// 这种短路设计在大型项目中节省大量时间：
+// 假设 200 个自动配置类，平均每个有 3 个 @Conditional，其中 150 个因 class 缺失直接排除
+// 短路避免了 150 × 2 = 300 次 Bean 查询
+```
+
+### 34.5 Bean Name 生成算法
+
+```java
+// AnnotationBeanNameGenerator — 从类名生成 Bean Name
+// 规则：
+//   UserService             → userService       (首字母小写)
+//   UserServiceImpl         → userServiceImpl   (不变)
+//   XMLParser               → XMLParser         (前两个大写 → 不变)
+//   URIController           → URIController     (同上)
+//   com.example.UserService  → userService       (取简单类名)
+
+// 核心算法：
+//   1. 取简单类名（去掉包名）
+//   2. 如果前两个字符都是大写 → 保持原名
+//   3. 否则 → Introspector.decapitalize(className)
+//       背后是 Character.toLowerCase(firstChar) + rest
+```
+
+### 34.6 ResolvableType — 泛型类型解析
+
+这是 Spring 自研的**泛型反射工具**，Java 的 Type Erasure 使得运行时无法获取泛型信息，`ResolvableType` 通过 Class 的 `getGenericSuperclass()` 和 `getGenericInterfaces()` 反推泛型。
+
+```java
+// 场景: UserRepository extends JpaRepository<User, Long>
+// 运行时 JpaRepository 的泛型 T=User, ID=Long 已被擦除
+// Spring 需要知道 User 和 Long 的具体类型来生成查询
+
+// ResolvableType 的解析过程:
+//   1. 获取 UserRepository 的父接口 JpaRepository
+//   2. 获取 JpaRepository 的 TypeVariable 绑定: T→User, ID→Long
+//   3. 返回 ResolvableType.forClass(User.class) 和 forClass(Long.class)
+
+// 伪代码:
+// class ResolvableType:
+//    static forInstance(Object o):
+//        clazz = o.getClass()
+//        // 遍历父接口，匹配泛型声明
+//        for interface in clazz.getGenericInterfaces():
+//            if interface is ParameterizedType:
+//                actualArgs = interface.getActualTypeArguments()
+//                // 建立 TypeVariable → 实际类型的映射
+//                map[interface.rawType.typeVars[i]] = actualArgs[i]
+```
+
+---
+
+## 35. 设计模式与算法总结速查
+
+| 分类 | 名称 | Spring 落地位置 | 一句话 |
+|------|------|----------------|--------|
+| **创建型** | 单例（注册表） | `DefaultSingletonBeanRegistry` | 不是饿汉/懒汉，是按名存取的注册表 |
+| **创建型** | 工厂方法 | `FactoryBean<T>` | 让"不能 new"的对象可以被容器管理 |
+| **创建型** | 抽象工厂 | `BeanFactory`、`AopProxyFactory` | 屏蔽实现细节，返回抽象类型 |
+| **结构型** | 代理 | `JdkDynamicAopProxy`、`CglibAopProxy` | AOP 的基石，无侵入增强 |
+| **结构型** | 适配器 | `HandlerAdapter` | 统一各种 Handler 的调用接口 |
+| **结构型** | 装饰器 | `BeanPostProcessor` 链 | 层层叠加功能，不改变接口 |
+| **行为型** | 模板方法 | `refresh()`、`getBean()` | 流程骨架不变，步骤可覆盖 |
+| **行为型** | 策略 | `InstantiationStrategy`、`CacheManager` | 运行时动态选择实现 |
+| **行为型** | 观察者 | `ApplicationListener`、`@EventListener` | 启动阶段广播，各组件按需监听 |
+| **行为型** | 责任链 | `SecurityFilterChain`、`MethodInterceptor` | 每个拦截器决定是否放行 |
+| **前端** | 前端控制器 | `DispatcherServlet` | 统一入口，集中分发 |
+| **算法** | 三级缓存查找 | `getSingleton()` | O(1) × 3 + lambda 延迟执行 |
+| **算法** | 拓扑排序 | `AutoConfigurationSorter` | 确保有依赖的类后加载 |
+| **算法** | 通配符匹配 | `AntPathMatcher` | 分治递归匹配 URL 模式 |
+| **算法** | 泛型解析 | `ResolvableType` | 反向推导 Type Erasure 丢失的泛型信息 |
