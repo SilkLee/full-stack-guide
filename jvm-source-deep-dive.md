@@ -299,7 +299,7 @@ sequenceDiagram
         JVM->>Heap: CMS 用此方案<br/>维护空闲内存列表
     end
     
-    JVM->>TLAB: 3. TLAB 分配(优先)<br/>-XX:UseTLAB(默认开启)
+    JVM->>TLAB: 3. TLAB 分配-优先<br/>-XX:UseTLAB-默认开启
     Note over TLAB: 每个线程在 Eden 有<br/>独占缓冲区,无锁分配
     
     JVM->>JVM: 4. 初始化零值
@@ -714,13 +714,13 @@ sequenceDiagram
     Shell->>Java: java -jar app.jar
     Java->>Java: 解析参数, 找 jvm.cfg
     Java->>JVM: 加载 jvm.dll / libjvm.so
-    JVM->>JVM: 1. CreateJVM() — 创建 JVM 实例
+    JVM->>JVM: 1. CreateJVM - 创建 JVM 实例
     JVM->>JVM: 2. 初始化 JVM 参数
     JVM->>JVM: 3. 创建 Bootstrap ClassLoader
     JVM->>JVM: 4. LauncherHelper 加载 Main 类
-    JVM->>Main: 5. main() 执行
+    JVM->>Main: 5. main 方法执行
     Main-->>JVM: 返回
-    JVM->>JVM: 6. DestroyJVM() — 销毁 JVM
+    JVM->>JVM: 6. DestroyJVM - 销毁 JVM
 ```
 
 ---
