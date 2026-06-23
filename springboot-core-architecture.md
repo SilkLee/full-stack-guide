@@ -27,6 +27,16 @@
 - [14. 启动全链路串联](#14-启动全链路串联)
 - [15. 关键扩展点速查](#15-关键扩展点速查)
 
+### 第三部分：Spring 生态深度解析
+- [16. Spring Boot Actuator](#16-spring-boot-actuator)
+- [17. Spring Data JPA 代理](#17-spring-data-jpa-代理)
+- [18. Spring Security 过滤器链](#18-spring-security-过滤器链)
+- [19. 自定义 Spring Boot Starter](#19-自定义-spring-boot-starter)
+- [20. Spring Boot Test 切片](#20-spring-boot-test-切片)
+- [21. 异常处理机制](#21-异常处理机制)
+- [22. Spring Cache 抽象](#22-spring-cache-抽象)
+- [23. 文档全景导航](#23-文档全景导航)
+
 ---
 
 ## 1. 总体架构概览
@@ -1743,3 +1753,782 @@ flowchart TD
 ---
 
 *本文基于 Spring Framework 6.x + Spring Boot 3.x 源码编写。*
+
+---
+
+# 第三部分：Spring 生态深度解析
+
+---
+
+## 16. Spring Boot Actuator
+
+Actuator 是 Spring Boot 的**生产级监控模块**，通过端点（Endpoint）暴露应用运行状态。
+
+### 16.1 端点架构
+
+```mermaid
+flowchart TB
+    subgraph JMX["JMX 暴露"]
+        JMX_EP["通过 JMX MBean 暴露"]
+    end
+    
+    subgraph WEB["HTTP 暴露"]
+        WEB_EP["通过 /actuator/* 端点暴露"]
+    end
+    
+    subgraph CORE["Endpoint 核心"]
+        EP["@Endpoint 注解<br/>定义端点类"]
+        OP1["@ReadOperation → GET"]
+        OP2["@WriteOperation → POST"]
+        OP3["@DeleteOperation → DELETE"]
+    end
+    
+    subgraph BUILTIN["内置端点"]
+        H["health<br/>应用健康状态"]
+        M["metrics<br/>指标数据"]
+        I["info<br/>应用信息"]
+        E["env<br/>环境属性"]
+        LG["loggers<br/>日志级别"]
+        TH["threaddump<br/>线程转储"]
+        HT["httptrace<br/>HTTP 追踪"]
+    end
+    
+    CORE --> JMX
+    CORE --> WEB
+    BUILTIN --> CORE
+```
+
+### 16.2 Health 健康检查机制
+
+```mermaid
+sequenceDiagram
+    participant Client as GET /actuator/health
+    participant Endpoint as HealthEndpoint
+    participant Registry as HealthContributorRegistry
+    participant Indicator1 as DataSourceHealthIndicator
+    participant Indicator2 as DiskSpaceHealthIndicator
+    participant Indicator3 as RedisHealthIndicator
+    participant Aggregator as HealthAggregator
+
+    Client->>Endpoint: health()
+    Endpoint->>Registry: 获取所有 HealthIndicator
+    Registry-->>Endpoint: List of HealthIndicator
+    
+    par 并行检查
+        Endpoint->>Indicator1: health()
+        Indicator1-->>Endpoint: {"status":"UP","details":"..."}
+    and
+        Endpoint->>Indicator2: health()
+        Indicator2-->>Endpoint: {"status":"UP","details":"..."}
+    and
+        Endpoint->>Indicator3: health()
+        Indicator3-->>Endpoint: {"status":"DOWN","details":"..."}
+    end
+    
+    Endpoint->>Aggregator: aggregate(healths)
+    Note over Aggregator: 任一 DOWN → 整体 DOWN<br/>全部 UP → 整体 UP
+    Aggregator-->>Endpoint: {"status":"DOWN","components":{...}}
+    Endpoint-->>Client: HTTP 503 + JSON
+```
+
+**核心源码**：
+
+```java
+// HealthEndpoint.java - 健康端点入口
+@Endpoint(id = "health")
+public class HealthEndpoint {
+    private final HealthContributorRegistry registry;
+    
+    @ReadOperation
+    public HealthComponent health() {
+        // 遍历所有 HealthIndicator，聚合结果
+        return this.registry.stream()
+            .map(indicator -> indicator.health())
+            .reduce(new Health.Builder().up(), (builder, health) -> 
+                builder.withDetail("component", health))
+            .build();
+    }
+}
+
+// AbstractHealthIndicator.java - 健康指标基类
+public abstract class AbstractHealthIndicator implements HealthIndicator {
+    @Override
+    public final Health health() {
+        Health.Builder builder = new Health.Builder();
+        try {
+            doHealthCheck(builder);  // 子类实现
+        } catch (Exception ex) {
+            builder.down(ex);        // 异常 → DOWN
+        }
+        return builder.build();
+    }
+    
+    protected abstract void doHealthCheck(Health.Builder builder) throws Exception;
+}
+```
+
+### 16.3 Metrics 指标采集（Micrometer）
+
+```mermaid
+flowchart LR
+    App["应用代码<br/>@Timed / Counter"] --> MR["MeterRegistry<br/>(Micrometer 抽象)"]
+    
+    MR --> PM["PrometheusMeterRegistry<br/>/actuator/prometheus"]
+    MR --> ELK["ElasticMeterRegistry"]
+    MR --> JM["JMXMeterRegistry"]
+    MR --> OT["OtlpMeterRegistry"]
+    
+    PM --> Prom["Prometheus Server"]
+    Prom --> Grafana["Grafana 仪表盘"]
+```
+
+---
+
+## 17. Spring Data JPA 代理
+
+Spring Data JPA 的核心魔法是**运行时动态生成 `JpaRepository` 的实现类**。
+
+### 17.1 代理创建流程
+
+```mermaid
+sequenceDiagram
+    participant Container as Spring 容器
+    participant Enable as @EnableJpaRepositories
+    participant Registrar as JpaRepositoryRegistrar
+    participant Factory as JpaRepositoryFactoryBean
+    participant Proxy as JdkDynamicAopProxy
+    participant Impl as SimpleJpaRepository
+
+    Container->>Enable: 扫描 @EnableJpaRepositories
+    Enable->>Registrar: registerBeanDefinitions()
+    Note over Registrar: 扫描 repository 接口<br/>创建 BeanDefinition (FactoryBean)
+    
+    Note over Container: 当需要注入 UserRepository 时
+    Container->>Factory: getObject()
+    Factory->>Factory: getRepository()
+    Factory->>Proxy: 创建 JDK 动态代理
+    
+    Note over Proxy: 代理拦截所有方法调用
+    
+    alt 接口方法 (findById, save...)
+        Proxy->>Impl: SimpleJpaRepository.findById()
+        Impl->>Impl: em.find(Class, id)
+        Impl-->>Proxy: Entity 对象
+    else @Query 方法
+        Proxy->>Proxy: 解析 JPQL → 创建 Query
+        Proxy-->>Container: 执行结果
+    end
+    
+    Proxy-->>Container: 返回代理对象 (注入完成)
+```
+
+### 17.2 JpaRepository 方法分发
+
+```mermaid
+flowchart TD
+    Call["userRepo.findByName('Tom')"] --> Proxy["JdkDynamicAopProxy.invoke()"]
+    Proxy --> Dispatch["JpaRepositoryFactory<br/>QueryExecutorMethodInterceptor"]
+    
+    Dispatch --> Q1{"方法类型？"}
+    
+    Q1 -->|"声明在 JpaRepository"| Impl["SimpleJpaRepository<br/>直接调用"]
+    Q1 -->|"方法名查询"| Parse["PartTreeJpaQuery<br/>解析 findBy + Name"]
+    Q1 -->|"@Query 注解"| Jpql["AbstractJpaQuery<br/>执行 JPQL/SQL"]
+    
+    Parse --> Criteria["JpaCriteriaQuery<br/>构建 WHERE name = ?"]
+    Jpql --> Native["EntityManager.createQuery()"]
+    
+    Impl --> EM1["em.find() / em.persist()"]
+    Criteria --> EM2["em.createQuery(criteria)"]
+    Native --> EM3["em.createQuery(jpql)"]
+```
+
+**核心源码**：
+
+```java
+// SimpleJpaRepository.java — 默认实现
+@Repository
+@Transactional(readOnly = true)
+public class SimpleJpaRepository<T, ID> implements JpaRepositoryImplementation<T, ID> {
+    
+    private final JpaEntityInformation<T, ?> entityInformation;
+    private final EntityManager em;  // ★ 底层 JPA EntityManager
+    
+    @Override
+    @Transactional
+    public <S extends T> S save(S entity) {
+        if (entityInformation.isNew(entity)) {
+            em.persist(entity);       // 新建 → persist
+            return entity;
+        } else {
+            return em.merge(entity);  // 已存在 → merge
+        }
+    }
+    
+    @Override
+    public Optional<T> findById(ID id) {
+        return Optional.ofNullable(em.find(getDomainClass(), id));
+    }
+    
+    // 方法名查询最终生成的代理
+    // findByLastNameAndFirstName → 自动解析为 WHERE last_name = ? AND first_name = ?
+}
+```
+
+---
+
+## 18. Spring Security 过滤器链
+
+Spring Security 基于**责任链模式**的 Servlet Filter 实现认证与授权。
+
+### 18.1 过滤器链架构
+
+```mermaid
+flowchart TD
+    Request["HTTP 请求"] --> FC["DelegatingFilterProxy<br/>(web.xml / Spring Boot 自动注册)"]
+    FC --> FCP["FilterChainProxy<br/>(Spring Security 入口)"]
+    
+    FCP --> Chain["SecurityFilterChain<br/>（实际过滤器链）"]
+    
+    subgraph Filters["默认过滤器链（共 15 个）"]
+        CSRF["CsrfFilter"]
+        CORS["CorsFilter"]
+        AUTH1["SecurityContextPersistenceFilter<br/>（加载 SecurityContext）"]
+        LC["LogoutFilter"]
+        AUTH2["UsernamePasswordAuthenticationFilter<br/>（处理登录表单）"]
+        BASIC["BasicAuthenticationFilter"]
+        RM["RememberMeAuthenticationFilter"]
+        ANON["AnonymousAuthenticationFilter"]
+        SESSION["SessionManagementFilter"]
+        EXC["ExceptionTranslationFilter<br/>（处理认证/授权异常）"]
+        AUTHZ["AuthorizationFilter<br/>（授权决策）"]
+    end
+    
+    FCP --> Filters
+    
+    CHAIN1["Chain 1: /api/**"]
+    CHAIN2["Chain 2: /admin/**"]
+    
+    AUTHZ --> Dispatcher["DispatcherServlet"]
+```
+
+### 18.2 认证流程（Username/Password）
+
+```mermaid
+sequenceDiagram
+    participant User as 浏览器
+    participant Filter as UsernamePasswordAuthenticationFilter
+    participant AM as AuthenticationManager
+    participant Provider as DaoAuthenticationProvider
+    participant UDS as UserDetailsService
+    participant SC as SecurityContextHolder
+
+    User->>Filter: POST /login (username + password)
+    Filter->>Filter: 提取 username/password → UsernamePasswordAuthenticationToken
+    
+    Filter->>AM: authenticate(token)
+    AM->>Provider: supports(token)? → authenticate(token)
+    
+    Provider->>UDS: loadUserByUsername(username)
+    UDS-->>Provider: UserDetails (含加密密码)
+    
+    Provider->>Provider: PasswordEncoder.matches(password, hashedPassword)
+    alt 密码匹配
+        Provider-->>AM: Authentication (已认证)
+        AM-->>Filter: Authentication
+        Filter->>SC: SecurityContextHolder.setContext(authentication)
+        Filter-->>User: 302 Redirect / 登录成功
+    else 密码不匹配
+        Provider-->>AM: BadCredentialsException
+        AM-->>Filter: AuthenticationException
+        Filter-->>User: 登录失败
+    end
+```
+
+### 18.3 SecurityContextHolder 线程绑定
+
+```java
+// SecurityContextHolder.java — 核心 ThreadLocal 设计
+public class SecurityContextHolder {
+    // ★ 三种存储策略
+    public static final String MODE_THREADLOCAL = "MODE_THREADLOCAL"; // 默认
+    public static final String MODE_INHERITABLETHREADLOCAL = "MODE_INHERITABLETHREADLOCAL";
+    public static final String MODE_GLOBAL = "MODE_GLOBAL";
+    
+    private static SecurityContextHolderStrategy strategy;
+    
+    static {
+        // 默认使用 ThreadLocal
+        strategy = new ThreadLocalSecurityContextHolderStrategy();
+    }
+    
+    public static SecurityContext getContext() {
+        return strategy.getContext();  // ThreadLocal.get()
+    }
+}
+
+// ThreadLocalSecurityContextHolderStrategy.java
+final class ThreadLocalSecurityContextHolderStrategy 
+        implements SecurityContextHolderStrategy {
+    
+    // ★ 每个线程独立的 SecurityContext
+    private static final ThreadLocal<Supplier<SecurityContext>> contextHolder = 
+        new ThreadLocal<>();
+    
+    @Override
+    public SecurityContext getContext() {
+        return contextHolder.get().get();
+    }
+}
+
+// SecurityContextPersistenceFilter — 请求结束时清理
+// 保证线程池复用时的线程安全（请求结束后 clear ThreadLocal）
+```
+
+---
+
+## 19. 自定义 Spring Boot Starter
+
+完整的 Starter 实现需要三步：`AutoConfiguration` + `Properties` + `META-INF/spring/*.imports`。
+
+### 19.1 Starter 结构
+
+```
+my-spring-boot-starter/
+├── pom.xml
+└── src/main/
+    ├── java/com/example/starter/
+    │   ├── MyService.java                       # 核心业务类
+    │   ├── MyServiceAutoConfiguration.java      # 自动配置类
+    │   └── MyProperties.java                    # 配置属性类
+    └── resources/
+        └── META-INF/spring/
+            └── org.springframework.boot.autoconfigure.AutoConfiguration.imports
+```
+
+### 19.2 完整代码实现
+
+```java
+// 1. 配置属性类 ★
+@ConfigurationProperties(prefix = "my.service")
+public class MyProperties {
+    private boolean enabled = true;        // 默认值
+    private String url = "http://localhost:8080";
+    private int timeout = 5000;
+    private Retry retry = new Retry();     // 嵌套配置
+    
+    public static class Retry {
+        private int maxAttempts = 3;
+        private long backoff = 1000;
+        // getters/setters...
+    }
+    // getters/setters...
+}
+
+// 2. 核心业务类 ★
+public class MyService {
+    private final MyProperties properties;
+    
+    public MyService(MyProperties properties) {
+        this.properties = properties;
+    }
+    
+    public String call() {
+        // 使用 properties.getUrl() / properties.getTimeout()
+        return "Called " + properties.getUrl();
+    }
+}
+
+// 3. 自动配置类 ★
+@AutoConfiguration                                                    // Spring Boot 3.x 新注解
+@EnableConfigurationProperties(MyProperties.class)                    // 启用属性绑定
+@ConditionalOnProperty(prefix = "my.service", name = "enabled", 
+                       havingValue = "true", matchIfMissing = true)  // 条件装配
+public class MyServiceAutoConfiguration {
+    
+    @Bean
+    @ConditionalOnMissingBean  // 用户可覆盖
+    public MyService myService(MyProperties properties) {
+        return new MyService(properties);
+    }
+}
+```
+
+```properties
+# 4. AutoConfiguration.imports 文件 ★
+# META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+com.example.starter.MyServiceAutoConfiguration
+```
+
+### 19.3 使用者配置
+
+```yaml
+# 引入 starter 后，application.yml 中配置：
+my:
+  service:
+    enabled: true
+    url: https://api.example.com
+    timeout: 10000
+    retry:
+      max-attempts: 5
+      backoff: 2000
+```
+
+---
+
+## 20. Spring Boot Test 切片
+
+Spring Boot Test 通过**切片注解**实现不同粒度的测试上下文加载。
+
+### 20.1 测试切片加载范围对比
+
+```mermaid
+flowchart TD
+    subgraph FULL["@SpringBootTest<br/>(完整加载)"]
+        ALL["整个 ApplicationContext<br/>所有 Bean + 自动配置 + WebServer"]
+    end
+    
+    subgraph MVC["@WebMvcTest<br/>(仅 MVC 层)"]
+        MVC_Beans["@Controller + @ControllerAdvice<br/>Filter + WebMvcConfigurer<br/>HandlerMapping + HandlerAdapter<br/>★ 不加载 @Service @Repository"]
+    end
+    
+    subgraph JPA["@DataJpaTest<br/>(仅 JPA 层)"]
+        JPA_Beans["@Entity + Repository<br/>DataSource + EntityManager<br/>★ 不加载 @Controller @Service<br/>★ 默认 @Transactional 自动回滚"]
+    end
+    
+    subgraph JSON["@JsonTest<br/>(仅 JSON 序列化)"]
+        JSON_Beans["ObjectMapper + Jackson Module<br/>★ 不加载任何业务 Bean"]
+    end
+    
+    subgraph REST["@RestClientTest<br/>(仅 RestClient)"]
+        REST_Beans["RestTemplate + RestClientBuilder<br/>MockRestServiceServer"]
+    end
+```
+
+### 20.2 常用测试示例
+
+```java
+// @WebMvcTest — 只测试 Controller 层
+@WebMvcTest(UserController.class)  // ★ 指定要测试的 Controller
+class UserControllerTest {
+    @Autowired
+    private MockMvc mockMvc;       // ★ 模拟 HTTP 请求
+    
+    @MockBean                        // ★ Controller 依赖的 Service 用 Mock
+    private UserService userService;
+    
+    @Test
+    void shouldReturnUser() throws Exception {
+        when(userService.findById(1L)).thenReturn(new User("Tom"));
+        
+        mockMvc.perform(get("/users/1"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.name").value("Tom"));
+    }
+}
+
+// @DataJpaTest — 只测试 JPA 层
+@DataJpaTest
+class UserRepositoryTest {
+    @Autowired
+    private TestEntityManager entityManager;  // ★ 测试专用 EntityManager
+    @Autowired
+    private UserRepository userRepository;
+    
+    @Test
+    void shouldFindByName() {
+        entityManager.persist(new User("Tom"));  // 预置数据
+        Optional<User> user = userRepository.findByName("Tom");
+        assertThat(user).isPresent();
+    }
+    // ★ 测试结束后自动回滚，不污染数据库
+}
+
+// @SpringBootTest — 完整集成测试
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+class UserIntegrationTest {
+    @Autowired
+    private TestRestTemplate restTemplate;  // ★ 真实 HTTP 调用
+    
+    @Test
+    void shouldGetUser() {
+        ResponseEntity<User> response = 
+            restTemplate.getForEntity("/users/1", User.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+}
+```
+
+### 20.3 测试切片机制原理
+
+```java
+// @WebMvcTest 源码 — 通过 @TypeExcludeFilters 限制扫描范围
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+@Documented
+@Inherited
+@BootstrapWith(WebMvcTestContextBootstrapper.class)
+@ExtendWith(SpringExtension.class)
+@OverrideAutoConfiguration(enabled = false)     // ★ 关闭自动配置
+@TypeExcludeFilters(WebMvcTypeExcludeFilter.class)  // ★ 排除 @Service/@Repository
+@AutoConfigureWebMvc                            // ★ 仅引入 MVC 相关配置
+@AutoConfigureMockMvc
+@ImportAutoConfiguration                         // ★ 导入有限的自动配置
+public @interface WebMvcTest {
+    Class<?>[] controllers() default {};         // 指定要测试的 Controller
+}
+```
+
+---
+
+## 21. 异常处理机制
+
+Spring Boot 的异常处理链路涉及 `@ControllerAdvice`、`ErrorController` 和 `ErrorMvcAutoConfiguration`。
+
+### 21.1 异常处理全链路
+
+```mermaid
+sequenceDiagram
+    participant Client as 浏览器
+    participant DS as DispatcherServlet
+    participant Handler as @Controller
+    participant Exception as @ControllerAdvice
+    participant Basic as BasicErrorController
+    participant Attr as ErrorAttributes
+
+    Client->>DS: GET /users/999 (不存在)
+    DS->>Handler: getUser(999)
+    Handler->>Handler: throw UserNotFoundException
+    
+    Note over Handler: 异常向上传播
+    Handler-->>DS: UserNotFoundException
+    
+    Note over DS: processDispatchResult()
+    DS->>DS: processHandlerException()
+    DS->>Exception: @ExceptionHandler(UserNotFoundException)
+    
+    alt @ControllerAdvice 处理
+        Exception-->>DS: ResponseEntity (JSON 错误信息)
+        DS-->>Client: HTTP 404 + JSON {"error":"用户不存在"}
+    else 无 @ControllerAdvice
+        Note over DS: 异常继续传播到 Servlet 容器
+        DS->>Basic: /error
+        Basic->>Attr: getErrorAttributes(request)
+        Attr-->>Basic: {status, error, message, trace}
+        Basic-->>Client: HTTP 404 + 错误页面/JSON
+    end
+```
+
+### 21.2 全局异常处理
+
+```java
+// @ControllerAdvice — 全局异常拦截
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    
+    // 处理特定异常
+    @ExceptionHandler(UserNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorResponse handleNotFound(UserNotFoundException ex) {
+        return new ErrorResponse("USER_NOT_FOUND", ex.getMessage());
+    }
+    
+    // 处理校验异常
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ErrorResponse handleValidation(MethodArgumentNotValidException ex) {
+        String message = ex.getBindingResult().getFieldErrors().stream()
+            .map(e -> e.getField() + ": " + e.getDefaultMessage())
+            .collect(Collectors.joining(", "));
+        return new ErrorResponse("VALIDATION_FAILED", message);
+    }
+    
+    // 兜底处理
+    @ExceptionHandler(Exception.class)
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+    public ErrorResponse handleAll(Exception ex) {
+        return new ErrorResponse("INTERNAL_ERROR", "服务器内部错误");
+    }
+}
+
+// 自定义异常
+@ResponseStatus(HttpStatus.NOT_FOUND)  // ★ 绑定 HTTP 状态码
+public class UserNotFoundException extends RuntimeException {
+    public UserNotFoundException(Long id) {
+        super("用户不存在: " + id);
+    }
+}
+```
+
+### 21.3 BasicErrorController 源码
+
+```java
+// BasicErrorController.java — Spring Boot 默认错误处理
+@Controller
+@RequestMapping("${server.error.path:${error.path:/error}}")
+public class BasicErrorController extends AbstractErrorController {
+    
+    // HTML 请求 → 返回错误页面
+    @RequestMapping(produces = MediaType.TEXT_HTML_VALUE)
+    public ModelAndView errorHtml(HttpServletRequest request, HttpServletResponse response) {
+        HttpStatus status = getStatus(request);
+        Map<String, Object> model = getErrorAttributes(request, getErrorAttributeOptions(request));
+        response.setStatus(status.value());
+        return new ModelAndView("error", model);
+    }
+    
+    // API 请求 → 返回 JSON
+    @RequestMapping
+    public ResponseEntity<Map<String, Object>> error(HttpServletRequest request) {
+        HttpStatus status = getStatus(request);
+        Map<String, Object> body = getErrorAttributes(request, getErrorAttributeOptions(request));
+        return new ResponseEntity<>(body, status);
+    }
+}
+```
+
+---
+
+## 22. Spring Cache 抽象
+
+Spring Cache 通过 `@Cacheable` AOP 拦截提供**声明式缓存**，底层支持多种缓存实现。
+
+### 22.1 缓存拦截流程
+
+```mermaid
+sequenceDiagram
+    participant Caller as 调用方
+    participant Proxy as CacheInterceptor<br/>(AOP 代理)
+    participant CM as CacheManager
+    participant Cache as Cache (Redis/Caffeine)
+    participant Method as 目标方法
+
+    Caller->>Proxy: @Cacheable getUser(1L)
+    Proxy->>CM: getCache("users")
+    CM-->>Proxy: Cache 实例
+    
+    Proxy->>Cache: get(key = "1")
+    
+    alt 缓存命中
+        Cache-->>Proxy: User 对象
+        Proxy-->>Caller: 直接返回（不执行方法）
+    else 缓存未命中
+        Proxy->>Method: 执行 getUser(1L)
+        Method-->>Proxy: User 对象
+        Proxy->>Cache: put(key = "1", value = User)
+        Proxy-->>Caller: User 对象
+    end
+```
+
+### 22.2 常用注解
+
+```java
+@Service
+public class UserService {
+    
+    // ★ @Cacheable — 缓存结果
+    @Cacheable(value = "users", key = "#id", unless = "#result == null")
+    public User getUser(Long id) {
+        // 只有缓存未命中时才执行此方法
+        return userRepository.findById(id).orElse(null);
+    }
+    
+    // ★ @CachePut — 更新缓存（始终执行方法）
+    @CachePut(value = "users", key = "#user.id")
+    public User updateUser(User user) {
+        return userRepository.save(user);
+    }
+    
+    // ★ @CacheEvict — 清除缓存
+    @CacheEvict(value = "users", key = "#id")
+    public void deleteUser(Long id) {
+        userRepository.deleteById(id);
+    }
+    
+    // ★ @Caching — 组合多个缓存操作
+    @Caching(
+        evict = {
+            @CacheEvict(value = "users", key = "#user.id"),
+            @CacheEvict(value = "userList", allEntries = true)
+        }
+    )
+    public User saveUser(User user) {
+        return userRepository.save(user);
+    }
+}
+```
+
+### 22.3 CacheInterceptor 核心实现
+
+```java
+// CacheInterceptor.java — @Cacheable 的 AOP 拦截器
+public class CacheInterceptor extends CacheAspectSupport implements MethodInterceptor {
+    
+    @Override
+    public Object invoke(MethodInvocation invocation) throws Throwable {
+        // 父类执行核心逻辑
+        return execute(invocation, invocation.getThis(), invocation.getMethod(), 
+                       invocation.getArguments());
+    }
+}
+
+// CacheAspectSupport.java — 缓存抽象基类
+public abstract class CacheAspectSupport {
+    
+    protected Object execute(CacheOperationInvoker invoker, Object target, 
+            Method method, Object[] args) {
+        
+        // 1. 获取所有缓存操作（@Cacheable, @CacheEvict...）
+        Collection<CacheOperation> operations = getCacheOperationSource()
+            .getCacheOperations(method, targetClass);
+            
+        // 2. 执行 @CacheEvict (beforeInvocation=true) — 清缓存
+        processCacheEvicts(contexts, true, CacheOperationExpressionEvaluator.NO_RESULT);
+        
+        // 3. 查缓存 — @Cacheable
+        Cache.ValueWrapper cacheHit = findCachedItem(contexts.get(CacheableOperation.class));
+        
+        if (cacheHit != null && !hasCachePut(contexts)) {
+            return cacheHit.get();  // ★ 缓存命中，直接返回
+        }
+        
+        // 4. 缓存未命中 — 执行目标方法
+        Object returnValue = invoker.invoke();
+        
+        // 5. 更新缓存 — @CachePut / @Cacheable
+        for (CacheOperationContext context : contexts) {
+            if (context instanceof CachePutOperation || 
+                (context instanceof CacheableOperation && cacheHit == null)) {
+                cache.put(key, returnValue);
+            }
+        }
+        
+        return returnValue;
+    }
+}
+```
+
+### 22.4 CacheManager 实现选择
+
+| 实现 | 依赖 | 适用场景 |
+|------|------|----------|
+| `ConcurrentMapCacheManager` | 无（内存） | 单机、开发测试 |
+| `RedisCacheManager` | `spring-boot-starter-data-redis` | 分布式缓存 |
+| `CaffeineCacheManager` | `com.github.ben-manes.caffeine` | 高性能本地缓存 |
+| `EhCacheCacheManager` | `ehcache` | 传统企业级缓存 |
+| `HazelcastCacheManager` | `hazelcast` | 分布式内存网格 |
+| `CompositeCacheManager` | 组合多个 | 多级缓存（L1 Caffeine + L2 Redis） |
+
+---
+
+## 23. 文档全景导航
+
+| 部分 | 章节 | 核心内容 |
+|------|------|----------|
+| **第一部分** | 1-7 | Spring Boot 启动流程、自动配置、内嵌服务器、外部配置 |
+| **第二部分** | 8-15 | Spring IoC、循环依赖、AOP、MVC、事务、事件 |
+| **第三部分** | 16-22 | Actuator、JPA、Security、Starter、Test、异常、Cache |
+
+---
+
+*全文基于 Spring Framework 6.x + Spring Boot 3.x + Spring Security 6.x 源码编写。*
