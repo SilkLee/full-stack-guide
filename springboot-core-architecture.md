@@ -1078,7 +1078,7 @@ sequenceDiagram
     User->>BF: getBean "userService"
     BF->>BF: doGetBean
 
-    Note over BF: 1. 转换 beanName - 去除 &amp; 前缀, 解析别名
+    Note over BF: 1. 转换 beanName - 去除前缀, 解析别名
     BF->>BF: transformedBeanName
 
     Note over BF: 2. 尝试从缓存获取
