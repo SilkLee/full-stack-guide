@@ -37,6 +37,17 @@
 - [22. Spring Cache 抽象](#22-spring-cache-抽象)
 - [23. 文档全景导航](#23-文档全景导航)
 
+### 第四部分：实战专家指南
+- [24. 设计哲学与架构意图](#24-设计哲学与架构意图)
+- [25. 常见坑与反模式](#25-常见坑与反模式)
+- [26. 调试与诊断实战](#26-调试与诊断实战)
+- [27. 性能优化指南](#27-性能优化指南)
+- [28. 最佳实践与选型决策](#28-最佳实践与选型决策)
+- [29. Spring Boot 3.x 新特性](#29-spring-boot-3x-新特性)
+- [30. Spring Boot 2.x → 3.x 迁移指南](#30-spring-boot-2x--3x-迁移指南)
+- [31. 每章速查卡片](#31-每章速查卡片)
+- [32. 互动思考题（含参考答案）](#32-互动思考题)
+
 ---
 
 ## 1. 总体架构概览
@@ -2532,3 +2543,639 @@ public abstract class CacheAspectSupport {
 ---
 
 *全文基于 Spring Framework 6.x + Spring Boot 3.x + Spring Security 6.x 源码编写。*
+
+---
+
+# 第四部分：实战专家指南
+
+> 这一部分是**授课型补充**——不是告诉你"怎么实现"，而是告诉你"为什么这样设计""踩过哪些坑""怎么选型"。
+
+---
+
+## 24. 设计哲学与架构意图
+
+理解 Spring 的设计 WHY，比记住源码 HOW 更重要。
+
+### 24.1 为什么 refresh() 分 12 步而不是 3 步？
+
+```mermaid
+flowchart LR
+    subgraph WHY["设计意图"]
+        W1["步骤解耦<br/>每个步骤可独立扩展"]
+        W2["失败隔离<br/>某步失败可精准回滚"]
+        W3["模板方法模式<br/>子类可覆盖特定步骤"]
+    end
+```
+
+Spring 采用**模板方法模式**，`refresh()` 每一步都是一个钩子方法：
+
+| 步骤 | 可覆盖性 | 典型扩展 |
+|------|----------|----------|
+| `prepareRefresh()` | 子类覆盖 | 校验必需属性 |
+| `obtainFreshBeanFactory()` | 框架锁定 | `AbstractRefreshableApplicationContext` 覆盖此步以支持 refresh 重建 |
+| `postProcessBeanFactory()` | **子类必覆盖** | `ServletWebServerApplicationContext` 在此注册 `WebServerFactory` |
+| `invokeBeanFactoryPostProcessors()` | 模板锁定 | 扩展点：`BeanFactoryPostProcessor` 接口 |
+| `onRefresh()` | **子类必覆盖** | `SpringApplication.run()` 硬编码改为 12 步模板，每步可独立调试、计时、监控 |
+
+> **教学要点**：这里体现了 Spring 最核心的设计原则——**开放扩展，封闭修改**。
+
+### 24.2 为什么用三级缓存解决循环依赖，而不是二级？
+
+| 方案 | 可行性 | 问题 |
+|------|--------|------|
+| 一级缓存 | ❌ | 无法区分"正在创建"和"已完成"的 Bean |
+| 二级缓存 | ⚠️ | 无法延迟 AOP 代理创建 |
+| **三级缓存** | ✅ | L3 存储 `ObjectFactory` 函数式接口，**延迟生成**代理对象 |
+
+**核心原因：AOP 代理需要提前暴露引用。**
+
+```java
+// 如果只有二级缓存，AOP 代理会出现问题：
+// 场景：A 依赖 B，B 依赖 A，且 A 需要 AOP 代理
+
+// 二缓方案：
+//   A 实例化 → put L2(A 原始对象) → 注入 B → B 拿到的是原始 A（非代理！）
+//   → A 初始化完成 → AOP 创建代理对象 → 但 B 持有的已经是原始对象的引用 ❌
+
+// 三缓方案：
+//   A 实例化 → put L3(factory) → 注入 B → B 需要 A
+//   → 调用 factory.getObject() → 此时 getEarlyBeanReference()
+//   → ★ 如果需要 AOP 代理，这里就创建代理对象
+//   → B 拿到的是代理对象 → 完美 ✅
+```
+
+> **教学要点**：三级缓存的本质不是"多了一层缓存"，而是引入了 **`ObjectFactory` 函数式接口的延迟执行能力**。
+
+### 24.3 为什么 `@Transactional` 自调用失效？
+
+**这是面试最高频问题之一。**
+
+```java
+@Service
+public class UserService {
+    
+    @Transactional
+    public void methodA() {
+        // ★ 这里 this 不是代理对象！
+        this.methodB();  // ← 自调用，事务失效！
+    }
+    
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void methodB() {
+        // 期望：新事务
+        // 实际：没有事务！（因为绕过了代理）
+    }
+}
+```
+
+```mermaid
+sequenceDiagram
+    participant Caller as 外部调用方
+    participant Proxy as UserService 代理
+    participant Real as UserService 真实对象
+
+    Caller->>Proxy: methodA()
+    Note over Proxy: 事务拦截器 → 开启事务
+    Proxy->>Real: methodA()
+    Real->>Real: this.methodB()
+    Note over Real: ★ 直接调用，绕过代理<br/>事务拦截器未触发！
+    
+    Real-->>Proxy: 返回
+    Note over Proxy: 事务提交
+    Proxy-->>Caller: 返回
+```
+
+**解决方案：**
+
+```java
+// 方案 1: 注入自己（Spring 会处理循环依赖）
+@Service
+public class UserService {
+    @Autowired
+    private UserService self;  // ★ 注入的是代理对象
+    
+    @Transactional
+    public void methodA() {
+        self.methodB();  // ✅ 通过代理调用
+    }
+}
+
+// 方案 2: 拆分为两个 Service
+// 方案 3: AopContext.currentProxy()
+```
+
+### 24.4 为什么 Spring Boot 用 SPI 而不是直接扫描？
+
+Spring Boot 自动配置采用 `spring.factories` / `AutoConfiguration.imports` 而不是包扫描，原因：
+
+| 方案 | 优点 | 缺点 |
+|------|------|------|
+| 包扫描 `@ComponentScan` | 简单 | 慢（扫描所有 class）、不可控（可能扫到不该扫的） |
+| **SPI 声明式** | 快（O(1) 读取）、可控（显式声明）、第三方可扩展 | 需要显式声明文件 |
+
+---
+
+## 25. 常见坑与反模式
+
+### 25.1 十大高频坑
+
+| # | 坑 | 现象 | 根因 | 解决 |
+|---|-----|------|------|------|
+| 1 | `@Transactional` 自调用失效 | 事务不生效 | 绕过 AOP 代理 | 注入 self / 拆 Service |
+| 2 | `@Async` 同样自调用失效 | 异步不生效 | 同 #1 | 同 #1 |
+| 3 | 构造器注入循环依赖 | `BeanCurrentlyInCreationException` | Spring 无法解决构造器循环依赖 | 改用 `@Lazy` 或 Setter 注入 |
+| 4 | `@ConfigurationProperties` 不生效 | 属性注入 null | 缺少 `@EnableConfigurationProperties` 或未注册为 Bean | 加注解或用 `@ConfigurationPropertiesScan` |
+| 5 | `application.yml` 不加载 | 配置读不到 | 文件位置不对 / 编码问题 | 确认在 `src/main/resources/` |
+| 6 | `@ComponentScan` 扫不到 | Bean 未注册 | 主类在根包外 | 显式指定 `basePackages` |
+| 7 | 多数据源事务混乱 | 事务错数据源 | 未指定 `transactionManager` | `@Transactional("txManager2")` |
+| 8 | 内嵌 Tomcat 端口冲突 | 启动失败 | 端口被占用 | `server.port=0` 随机端口 / 排查占用 |
+| 9 | `ThreadLocal` 内存泄漏 | 线程池中数据串了 | 未清理 ThreadLocal | `SecurityContextPersistenceFilter` 自动清理 |
+| 10 | `@Scheduled` 不执行 | 定时任务不跑 | 缺少 `@EnableScheduling` | 加上注解 |
+
+### 25.2 反模式：`Field Injection` vs `Constructor Injection`
+
+```java
+// ❌ 反模式：字段注入
+@Service
+public class UserService {
+    @Autowired
+    private UserRepository userRepo;  // 无法 final，单元测试必须用 Spring
+    
+    // 问题：
+    // 1. 不能声明为 final（无法保证不可变性）
+    // 2. 单元测试必须启动 Spring 容器或用反射注入
+    // 3. 容易导致循环依赖不报错（延迟暴露）
+    // 4. 构造器臃肿不可见
+}
+
+// ✅ 推荐：构造器注入
+@Service
+public class UserService {
+    private final UserRepository userRepo;
+    
+    public UserService(UserRepository userRepo) {  // Spring 4.3+ 无需 @Autowired
+        this.userRepo = userRepo;
+    }
+    
+    // 优点：
+    // 1. 可声明 final
+    // 2. 单元测试可直接 new
+    // 3. 依赖过多时构造器参数列表自然会提醒你重构
+}
+```
+
+---
+
+## 26. 调试与诊断实战
+
+### 26.1 启动失败三板斧
+
+```bash
+# 1. 最详细的启动日志
+java -jar app.jar --debug
+
+# 2. 查看自动配置报告 —— ★ 最重要
+#    application.yml 中启用：
+management:
+  endpoint:
+    health:
+      show-details: always
+
+# 3. 启动时输出 ConditionEvaluationReport
+#    代码中：
+@SpringBootApplication
+public class MyApp {
+    public static void main(String[] args) {
+        ConfigurableApplicationContext ctx = 
+            SpringApplication.run(MyApp.class, args);
+        
+        // ★ 打印自动配置匹配/不匹配报告
+        ConditionEvaluationReport report = ctx.getBean(
+            ConditionEvaluationReport.class);
+        report.getConditionAndOutcomesBySource().forEach((source, outcomes) -> {
+            if (outcomes.isFullMatch()) return;  // 只看不匹配的
+            System.out.println(source + ": " + outcomes);
+        });
+    }
+}
+```
+
+### 26.2 ConditionEvaluationReport 解读
+
+```java
+// Positive matches（匹配成功，自动配置已生效）：
+//   DataSourceAutoConfiguration matched:
+//     - @ConditionalOnClass: DataSource.class found ✅
+//     - @ConditionalOnProperty: spring.datasource.url is set ✅
+
+// Negative matches（未匹配，自动配置未生效）：
+//   RabbitAutoConfiguration did not match:
+//     - @ConditionalOnClass: RabbitTemplate.class not found ❌
+
+// Exclusions（被排除）：
+//   SecurityAutoConfiguration excluded by user
+```
+
+### 26.3 运行时诊断
+
+```bash
+# Actuator 端点（生产环境慎开）
+GET /actuator/beans           # 所有 Bean 列表
+GET /actuator/conditions       # ConditionEvaluationReport
+GET /actuator/configprops      # @ConfigurationProperties 绑定状态
+GET /actuator/mappings         # 所有 @RequestMapping 映射
+GET /actuator/env              # 环境属性
+GET /actuator/heapdump         # 堆转储
+GET /actuator/threaddump       # 线程转储
+```
+
+```java
+// 程序中获取 Bean
+@Component
+public class BeanInspector {
+    @Autowired
+    private ApplicationContext ctx;
+    
+    public void inspect() {
+        // 某类型的 Bean
+        Map<String, DataSource> beans = ctx.getBeansOfType(DataSource.class);
+        
+        // 某注解的 Bean
+        Map<String, Object> controllers = 
+            ctx.getBeansWithAnnotation(RestController.class);
+    }
+}
+```
+
+---
+
+## 27. 性能优化指南
+
+### 27.1 启动速度优化
+
+```yaml
+# application.yml
+spring:
+  main:
+    lazy-initialization: true    # ★ 全局懒加载，启动时间可减少 30-50%
+    
+  jpa:
+    open-in-view: false          # ★ 关闭 OSIV，避免持有数据库连接
+    
+  autoconfigure:
+    exclude:                     # ★ 排除不需要的自动配置
+      - org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration
+```
+
+```java
+// 精确懒加载
+@SpringBootApplication
+@ComponentScan(lazyInit = true)  // 所有 @Component 懒加载
+public class MyApp {}
+
+// 或：按需饥饿加载关键 Bean
+@Component
+@Lazy(false)                     // 这个 Bean 不懒加载
+public class CriticalService {}
+```
+
+### 27.2 运行时性能优化
+
+| 优化项 | 方案 | 效果 |
+|--------|------|------|
+| 数据库连接池 | HikariCP（默认，最优） | 比 Tomcat CP 快 3-5x |
+| JSON 序列化 | 避免循环引用、关闭 `FAIL_ON_UNKNOWN_PROPERTIES` | 减少 20% 序列化时间 |
+| 静态资源 | 启用压缩 + 缓存 | `server.compression.enabled=true` |
+| AOP 代理 | 优先 JDK Proxy（接口）而非 CGLIB | 减少字节码生成开销 |
+| Bean 数量 | 避免无意义 `@Component` | 每减少 100 个 Bean，启动快 100ms |
+| 虚拟线程 | Java 21+ `spring.threads.virtual.enabled=true` | Tomcat 请求处理线程几乎无限 |
+
+### 27.3 内存优化
+
+```java
+// Spring Boot 3.2+ AOT 编译 —— 启动速度提升 50%+
+// build.gradle
+plugins {
+    id 'org.springframework.boot' version '3.2.0'
+    id 'org.graalvm.buildtools.native' version '0.9.28'
+}
+
+graalvmNative {
+    binaries {
+        main {
+            imageName.set('app')
+            buildArgs.add('--no-fallback')
+        }
+    }
+}
+// 编译: ./gradlew nativeCompile
+// 启动: ./build/native/nativeCompile/app (毫秒级启动!)
+```
+
+---
+
+## 28. 最佳实践与选型决策
+
+### 28.1 选型决策表
+
+| 场景 | 选择 | 理由 |
+|------|------|------|
+| **依赖注入** | 构造器注入 | 不可变、可测试、依赖可见 |
+| 可选依赖 | Setter 注入 + `@Autowired(required=false)` | 明确表示可选 |
+| **AOP vs Interceptor** | AOP：业务横切（事务/缓存）；Interceptor：Web 层（日志/鉴权） | 粒度不同 |
+| **@ControllerAdvice vs ErrorController** | `@ControllerAdvice`：业务异常；`ErrorController`：兜底（404/500） | 前者收窄，后者兜底 |
+| **JDK Proxy vs CGLIB** | 默认 CGLIB（Boot 2.x 起）；有接口可选 JDK | CGLIB 不要求接口但 final 方法无效 |
+| **REQUIRED vs REQUIRES_NEW** | REQUIRED：默认；REQUIRES_NEW：日志/审计（独立提交） | 后者的 commit/rollback 独立 |
+| **application.yml vs .properties** | yml：层次结构清晰；properties：简单平铺 | yml 更适合复杂配置 |
+| **JPA vs MyBatis** | JPA：对象映射强；MyBatis：复杂 SQL 灵活 | 看团队和业务 |
+| **Redis vs Caffeine（缓存）** | Redis：分布式；Caffeine：单机高性能 | Caffeine 比 Redis 快 100x |
+| **WebMVC vs WebFlux** | MVC：同步阻塞，生态成熟；WebFlux：异步非阻塞 | 高并发 I/O 密集 → WebFlux |
+
+### 28.2 日志最佳实践
+
+```java
+// ✅ 推荐：Lombok + 占位符
+@Slf4j
+@Service
+public class UserService {
+    public User getUser(Long id) {
+        log.info("查询用户: id={}", id);  // ★ 占位符，避免字符串拼接
+        // ...
+    }
+}
+
+// ❌ 不推荐：字符串拼接
+log.info("查询用户: id=" + id);  // 每次都拼接，即使日志级别关闭
+
+// ✅ 异常日志：一定要传 Throwable
+try {
+    // ...
+} catch (Exception e) {
+    log.error("用户查询失败: id={}", id, e);  // ★ 最后一个参数传异常
+}
+```
+
+### 28.3 异常处理分层
+
+```mermaid
+flowchart LR
+    Repo["Repository<br/>throw 原始异常"] --> Service["Service<br/>转为业务异常"]
+    Service --> Controller["Controller<br/>不捕获，向上抛"]
+    Controller --> Advice["@ControllerAdvice<br/>统一转为 HTTP 响应"]
+```
+
+```java
+// ★ 异常分层转换
+@Repository
+public class UserRepository {
+    public User findById(Long id) {
+        try {
+            // JPA 操作
+        } catch (DataAccessException e) {
+            throw new DataLayerException("数据访问失败", e);  // 包装
+        }
+    }
+}
+
+@Service
+public class UserService {
+    public User getUser(Long id) {
+        try {
+            return userRepo.findById(id);
+        } catch (DataLayerException e) {
+            throw new UserNotFoundException(id, e);  // 转为业务异常
+        }
+    }
+}
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    @ExceptionHandler(UserNotFoundException.class)
+    @ResponseStatus(NOT_FOUND)
+    public ErrorResponse handle(UserNotFoundException e) {
+        return ErrorResponse.of("USER_NOT_FOUND", e.getMessage());
+    }
+}
+```
+
+---
+
+## 29. Spring Boot 3.x 新特性
+
+### 29.1 Jakarta EE 迁移
+
+```
+Spring Boot 2.x:  javax.persistence.*  javax.servlet.*
+Spring Boot 3.x:  jakarta.persistence.*  jakarta.servlet.*
+```
+
+IDEA 自动迁移: `Refactor → Migrate Packages and Classes → javax to jakarta`
+
+### 29.2 AOT 编译 + GraalVM Native Image
+
+```mermaid
+flowchart LR
+    Source["Java 源码"] --> AOT["Spring AOT 编译<br/>（构建时处理）"]
+    AOT --> Graal["GraalVM native-image"]
+    Graal --> Binary["独立可执行文件<br/>★ 毫秒级启动"]
+```
+
+| 特性 | JVM 模式 | Native Image |
+|------|----------|-------------|
+| 启动时间 | 2-5 秒 | **0.05 秒** |
+| 内存占用 | 200-500 MB | **50-100 MB** |
+| 吞吐量（稳态） | 高 | 中（无 JIT） |
+| 限制 | 无 | 不支持动态代理、反射需配置 |
+
+### 29.3 虚拟线程（Java 21 + Spring Boot 3.2）
+
+```yaml
+# application.yml
+spring:
+  threads:
+    virtual:
+      enabled: true  # ★ Tomcat/Jetty 使用虚拟线程处理请求
+```
+
+虚拟线程 = 轻量级线程（Project Loom），一个 JVM 可创建**百万级**虚拟线程，适合 I/O 密集型高并发场景。
+
+### 29.4 ProblemDetail（RFC 9457）
+
+Spring Boot 3.x 内置 `ProblemDetail` 标准错误响应：
+
+```java
+@RestControllerAdvice
+public class ProblemDetailHandler {
+    
+    @ExceptionHandler(UserNotFoundException.class)
+    public ProblemDetail handle(UserNotFoundException e) {
+        ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        pd.setTitle("User Not Found");
+        pd.setDetail(e.getMessage());
+        pd.setProperty("userId", e.getUserId());  // 自定义字段
+        return pd;  // ★ 自动序列化为 RFC 9457 JSON
+    }
+}
+
+// 响应 JSON:
+// {
+//   "type": "about:blank",
+//   "title": "User Not Found",
+//   "status": 404,
+//   "detail": "用户不存在: 999",
+//   "instance": "/users/999",
+//   "userId": 999
+// }
+```
+
+### 29.5 Observability（可观测性）
+
+Spring Boot 3.x 用 Micrometer Tracing 替代 Sleuth：
+
+```yaml
+management:
+  tracing:
+    sampling:
+      probability: 1.0    # 100% 采样
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9411/api/v2/spans
+```
+
+```java
+@RestController
+public class UserController {
+    
+    @GetMapping("/users/{id}")
+    public User getUser(@PathVariable Long id) {
+        // ★ Observation API — 比 @Timed 更灵活
+        return Observation.createNotStarted("user.find-by-id", registry)
+            .lowCardinalityKeyValue("userId", id.toString())
+            .observe(() -> userService.findById(id));
+    }
+}
+```
+
+### 29.6 其他重要变化
+
+| 特性 | 2.x | 3.x |
+|------|-----|-----|
+| 最低 Java 版本 | Java 8 | **Java 17** |
+| 自动配置注册 | `spring.factories` | `AutoConfiguration.imports` |
+| `@AutoConfiguration` | `@Configuration` | 新注解，标记自动配置类 |
+| `WebSecurityConfigurerAdapter` | 继承使用 | **已废弃**，用 `SecurityFilterChain` Bean |
+| `spring.flyway` / `spring.liquibase` | 默认执行 | 需显式配置 `enabled: true` |
+
+---
+
+## 30. Spring Boot 2.x → 3.x 迁移指南
+
+### 30.1 自动化迁移
+
+```bash
+# Spring 官方迁移工具
+sdk install springboot
+spring boot migrate
+
+# 或：OpenRewrite（推荐）
+# build.gradle
+plugins {
+    id 'org.openrewrite.rewrite' version '6.x'
+}
+
+rewrite {
+    activeRecipe('org.openrewrite.java.spring.boot3.UpgradeSpringBoot_3_2')
+}
+```
+
+### 30.2 手动迁移清单
+
+| 步骤 | 操作 | 注意 |
+|------|------|------|
+| 1 | 升级 Java 17+ | `java -version` |
+| 2 | 升级 Spring Boot 3.2.x | `spring-boot-starter-parent` 版本 |
+| 3 | 全局替换 `javax.*` → `jakarta.*` | 包括 JPA、Servlet、Validation |
+| 4 | `spring.factories` → `AutoConfiguration.imports` | 文件名和格式都变 |
+| 5 | `WebSecurityConfigurerAdapter` 重构 | 改为声明 `SecurityFilterChain` Bean |
+| 6 | `@ConstructorBinding` 移除 | Boot 3.x 自动检测（单构造器场景） |
+| 7 | 检查 Actuator 端点变更 | `/actuator/health` 默认不显示详情 |
+| 8 | 升级第三方依赖 | 确保都支持 Jakarta EE 9+ |
+
+---
+
+## 31. 每章速查卡片
+
+### 第一部分速查
+
+| 章 | 一句话 | 关键类 | 高频面试题 |
+|----|--------|--------|------------|
+| 1 | Spring Boot = 自动配置 + Starter + Actuator | `SpringApplication` | Spring Boot 和 Spring 区别？ |
+| 2 | `run()` 方法 11 步启动，核心在 `refreshContext()` | `SpringApplicationRunListener` | 启动流程说一遍？ |
+| 3 | `AutoConfigurationImportSelector` 从 imports 文件加载配置类 | `AutoConfigurationImportSelector` | 自动配置原理？ |
+| 4 | 默认 Tomcat，`ServletWebServerFactory` 创建 | `TomcatServletWebServerFactory` | 怎么切换 Jetty？ |
+| 5 | `refresh()` 12 步完成 Bean 生命周期 | `AbstractApplicationContext` | Bean 生命周期？ |
+| 6 | 17 种配置源，按优先级合并 | `ConfigDataEnvironment` | 配置优先级排序？ |
+| 7 | 10+ 个 SPI 接口，可在启动各阶段插入逻辑 | `BeanFactoryPostProcessor` | 用过哪些扩展点？ |
+
+### 第二部分速查
+
+| 章 | 一句话 | 关键类 | 高频面试题 |
+|----|--------|--------|------------|
+| 8 | `DefaultListableBeanFactory` 是 IoC 核心 | `DefaultListableBeanFactory` | BeanFactory vs ApplicationContext？ |
+| 9 | 三级缓存解决 Setter 循环依赖，构造器无法解决 | `DefaultSingletonBeanRegistry` | 循环依赖怎么解决？ |
+| 10 | `BeanPostProcessor` 链中创建 AOP 代理 | `AbstractAutoProxyCreator` | JDK Proxy vs CGLIB？ |
+| 11 | `DispatcherServlet.doDispatch()` 9 步分发 | `DispatcherServlet` | Spring MVC 请求流程？ |
+| 12 | AOP + ThreadLocal 实现声明式事务 | `TransactionSynchronizationManager` | @Transactional 原理？失效场景？ |
+| 13 | `ApplicationEventMulticaster` 支持同步/异步广播 | `SimpleApplicationEventMulticaster` | @TransactionalEventListener 原理？ |
+
+### 第三部分速查
+
+| 章 | 一句话 | 关键类 | 高频面试题 |
+|----|--------|--------|------------|
+| 16 | `/actuator/health` 聚合所有 `HealthIndicator` | `HealthEndpoint` | 怎么自定义健康检查？ |
+| 17 | `JpaRepository` 运行时生成 JDK 代理 + `SimpleJpaRepository` | `SimpleJpaRepository` | save() 怎么区分 insert/update？ |
+| 18 | 15 个 Filter 组成责任链，`SecurityContextHolder` 存认证信息 | `SecurityFilterChain` | Spring Security 原理？ |
+| 19 | `@ConfigurationProperties` + `@AutoConfiguration` + imports 文件 | - | 怎么自定义 Starter？ |
+| 20 | `@WebMvcTest` 只加载 Controller 层 | `@WebMvcTest` | @SpringBootTest vs @WebMvcTest？ |
+| 21 | `@ControllerAdvice` 收窄异常 → `BasicErrorController` 兜底 | `BasicErrorController` | 全局异常处理怎么实现？ |
+| 22 | `CacheInterceptor` AOP 拦截，`CacheManager` 多种后端 | `CacheInterceptor` | @Cacheable 原理？缓存穿透？ |
+
+---
+
+## 32. 互动思考题
+
+### 第一部分
+
+1. 如果不使用 `@SpringBootApplication`，如何手动实现等价效果？三个注解分别写试试。
+2. 如果启动时某自动配置类未生效，你如何排查是哪个 `@Conditional` 条件不满足？
+3. Spring Boot 如何检测当前是 Servlet 环境还是 Reactive 环境？`WebApplicationType` 的判断逻辑是什么？
+
+### 第二部分
+
+4. 如果发生循环依赖，`BeanCurrentlyInCreationException` 的堆栈信息是什么样子？从中能提取哪些有用信息？
+5. Spring MVC 如果同时有 `@ExceptionHandler` 和 `@ControllerAdvice`，哪个优先级更高？为什么？
+6. `@Transactional(propagation = Propagation.NESTED)` 和 `REQUIRES_NEW` 在 JDBC 和 JTA 下的行为有什么区别？
+
+### 第三部分
+
+7. 为什么 `@WebMvcTest` 不能测 Service 层？它的 Bean 加载机制是什么？
+8. `@TransactionalEventListener(phase = AFTER_COMMIT)` 如果事务回滚了，监听器还会执行吗？AFTER_COMPLETION 呢？
+9. Spring Data JPA 的方法名解析支持哪些关键词？`findByAgeGreaterThanAndNameLike` 会被翻译成什么 JPQL？
+
+### 思考题参考答案（简要）
+
+| # | 答案要点 |
+|---|----------|
+| 1 | `@Configuration` + `@EnableAutoConfiguration` + `@ComponentScan` |
+| 2 | 看 `ConditionEvaluationReport`，或启动时加 `--debug` |
+| 3 | `ClassUtils.isPresent("DispatcherServlet")` && `!isPresent("DispatcherHandler")` |
+| 4 | 堆栈包含 Bean 名 + 循环链 `A → B → A` |
+| 5 | `@ControllerAdvice` 优先级更高，先于局部 `@ExceptionHandler` |
+| 6 | NESTED 用 savepoint（JDBC），REQUIRES_NEW 挂起当前事务（物理连接不同） |
+| 7 | `@WebMvcTest` 通过 `@TypeExcludeFilters` 排除了 `@Service` `@Repository` |
+| 8 | 回滚时 AFTER_COMMIT 不触发，AFTER_COMPLETION 会触发（含 `AFTER_ROLLBACK`） |
+| 9 | 翻译为 `WHERE age > ? AND name LIKE ?`，支持 ~20 个关键词 |
+
+---
+
+*全文 32 章，基于 Spring Framework 6.x + Spring Boot 3.x + Spring Security 6.x 源码编写。*
