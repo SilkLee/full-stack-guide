@@ -86,7 +86,7 @@
 | P1 | **MCP 工具体系** | 停用 Pipedream，接内部 MCP Server | 2天 | §17.4 |
 | P1 | **Git 托管** | GitHub → 内部 GitLab | 1天 | §5 |
 | P1 | **前端文案** | 全局文案 AutoCorp 化 | 2天 | §7 |
-| P2 | **CI/CD** | GitLab CI + ECR + ECS 部署流水线 | 2天 | §14.6 |
+| P2 | **CI/CD** | GitLab CI + ECR + EKS 部署流水线 | 2天 | §14.6 |
 | P2 | **审计** | Sentry → Splunk SIEM | 2天 | §17.3 |
 | P2 | **密钥管理** | dotenvx + AWS SM → 统一 KMS | 1天 | §17.5 |
 | P2 | **沙箱镜像** | 构建含 AutoCorp CA + 企业工具的基础镜像 | 1天 | §17.5 |
@@ -1073,7 +1073,7 @@ Skills 是**可复用的领域知识模块**，Markdown + 可执行脚本：
 flowchart LR
     CODE["改代码<br/>定制 LLM 网关、MCP、Logo"] --> BUILD["构建镜像<br/>docker build -t autocorp-agent-api"]
     BUILD --> PUSH["推送到 ECR<br/>内部镜像仓库"]
-    PUSH --> DEPLOY["更新 ECS<br/>换上新镜像"]
+    PUSH --> DEPLOY["更新 EKS Deployment<br/>换上新镜像"]
     DEPLOY --> VERIFY["验证 /health<br/>新版本生效"]
 ```
 
@@ -1091,8 +1091,8 @@ docker tag autocorp-agent-api:v1.0 \
   123456789.dkr.ecr.eu-central-1.amazonaws.com/autocorp-agent-api:v1.0
 docker push 123456789.dkr.ecr.eu-central-1.amazonaws.com/autocorp-agent-api:v1.0
 
-# 3. 更新 ECS Service（用新镜像）
-aws ecs update-service \
+# 3. 更新 EKS Deployment Service（用新镜像）
+aws kubectl rollout restart deployment \
   --cluster autocorp-agent \
   --service api \
   --force-new-deployment
@@ -1130,14 +1130,14 @@ build-api:
 deploy-dev:
   stage: deploy
   script:
-    - aws ecs update-service --cluster autocorp-agent-dev --service api --force-new-deployment
+    - aws kubectl rollout restart deployment --cluster autocorp-agent-dev --service api --force-new-deployment
   only:
     - main
 
 deploy-prod:
   stage: deploy
   script:
-    - aws ecs update-service --cluster autocorp-agent-prod --service api --force-new-deployment
+    - aws kubectl rollout restart deployment --cluster autocorp-agent-prod --service api --force-new-deployment
   only:
     - tags  # 打 tag 才部署生产
   when: manual  # 需要手动确认
@@ -1319,11 +1319,11 @@ url = "https://mcp-jira.internal.autocorp.com"
 flowchart TB
     subgraph VPC["AutoCorp VPC - eu-central-1"]
         ALB["ALB - SSL + OIDC"]
-        ECS["ECS Fargate API × 3"]
+        ECS["EKS Fargate API × 3 Pods"]
         RDS["RDS PostgreSQL - Kortix 元数据"]
         REDIS["ElastiCache Redis"]
         S3["S3 - 文件存储"]
-        SB["ECS EC2 沙箱 Task"]
+        SB["EKS Worker Node 沙箱 Task"]
         ECR["ECR - 企业基础镜像"]
     end
 
@@ -1350,8 +1350,8 @@ flowchart TB
 |------|----------|------|
 | RDS PostgreSQL Multi-AZ | ~450 | — |
 | ElastiCache Redis | ~60 | — |
-| ECS Fargate API × 3 | ~280 | — |
-| ECS EC2 Sandbox × 10 | ~600 | — |
+| EKS Fargate API × 3 Pods | ~280 | — |
+| EKS Worker Nodes (沙箱用) | ~600 | — |
 | ALB + S3 + KMS + 监控 | ~125 | — |
 | LiteLLM / Skills / MCP | ~0 | **已有** |
 | **合计** | **~1,515** | LLM 网关和 Skills 省了 |
@@ -1367,7 +1367,7 @@ flowchart LR
     P2 --> P3["Week 8-10<br/>单团队试点"]
     P3 --> P4["Week 11-14<br/>多团队推广"]
 
-    P0["Terraform 部署 Kortix<br/>RDS + ECS + 沙箱就绪<br/>Azure AD SSO 对接"]
+    P0["Terraform 部署 Kortix<br/>RDS + EKS + 沙箱就绪<br/>Azure AD SSO 对接"]
     P1["LLM 调用走 LiteLLM<br/>MCP Server 工具可用<br/>SAP 查询 / Jira 创建"]
     P2["Skills 从中央平台订阅<br/>版本锁定 + 审批流程<br/>沙箱启动自动拉取"]
     P3["制动系统团队试运行<br/>3 个 Agent 真实任务<br/>SAP 报告 / PLM 查询"]
@@ -1405,7 +1405,7 @@ flowchart LR
 | **LLM** | Large Language Model | 大语言模型。GPT-4、Claude 这些"AI 大脑"的总称 |
 | **API** | Application Programming Interface | 系统后端。接收 Web/Slack 发来的请求，调度 Agent 干活的"中枢" |
 | **Supabase** | — | 开源数据库 + 用户登录 + 文件存储。我们 Fork 后替换为公司内部认证系统 |
-| **ECS** | Elastic Container Service | AWS 的容器管理服务。Docker 容器跑在上面 |
+| **EKS** | Elastic Kubernetes Service | AWS 的托管 Kubernetes 服务 |
 | **ECR** | Elastic Container Registry | AWS 的镜像仓库。存我们定制好的 Docker 镜像 |
 
 ---
