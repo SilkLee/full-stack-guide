@@ -2931,151 +2931,537 @@ public interface UserMapper {  // 纯接口！
 2. **渐进式** — 可以只用 IoC，不加 AOP；可以用 Boot，不上 Cloud
 3. **社区治理** — Pivotal/VMware/Broadcom 连续收购但 Spring 始终保持 Apache 2.0 开源
 
-### 24.11 Spring 与 DDD（领域驱动设计）的关系
+### 24.11 Spring 与 DDD（领域驱动设计）
 
-Spring 不是 DDD 框架，但它的多个模块**天然对齐 DDD 的战术模式**。
+> **一句话**：Spring 不是 DDD 框架，但它提供了 DDD 战术模式所需的一切基础设施——你只需要按 DDD 的方式组织代码。
+
+#### 24.11.1 先区分：战略设计 vs 战术设计
 
 ```mermaid
 flowchart TB
+    subgraph STRATEGIC["战略设计 — Spring 不直接参与"]
+        UL["统一语言 Ubiquitous Language<br/>团队+领域专家共同定义术语"]
+        BC["限界上下文 Bounded Context<br/>每个上下文有自己的模型"]
+        CM["上下文映射 Context Map<br/>上下文之间的集成关系"]
+    end
+
+    subgraph TACTICAL["战术设计 — Spring 直接支持"]
+        ENT["Entity 实体"]
+        VO["Value Object 值对象"]
+        AGG["Aggregate 聚合"]
+        REPO["Repository 仓储"]
+        EVENT["Domain Event 领域事件"]
+        SVC["Domain Service 领域服务"]
+        FACTORY["Factory 工厂"]
+    end
+
+    STRATEGIC -->|"指导"| TACTICAL
+```
+
+DDD 的**战略设计**是"人"的事——语言统一、边界划分、上下文关系。Spring 不参与这部分。
+
+DDD 的**战术设计**是"代码"的事——实体、值对象、聚合、仓储……**Spring 的每个模块几乎完美对应一种战术模式**。
+
+#### 24.11.2 战术模式 → Spring 映射全景
+
+```mermaid
+flowchart LR
     subgraph DDD["DDD 战术模式"]
-        ENTITY["Entity<br/>有唯一标识, 可变"]
-        VO["Value Object<br/>无标识, 不可变"]
-        AGG["Aggregate<br/>一致性边界"]
-        REPO["Repository<br/>聚合持久化"]
-        EVENT["Domain Event<br/>领域事件"]
-        SVC["Domain Service<br/>无状态领域逻辑"]
-        FACTORY["Factory<br/>复杂对象创建"]
+        E["Entity"]
+        V["Value Object"]
+        A["Aggregate"]
+        R["Repository"]
+        DE["Domain Event"]
+        DS["Domain Service"]
+        F["Factory"]
     end
 
-    subgraph SPRING["Spring 对应支持"]
-        JPA["@Entity + @Id<br/>JPA Entity = DDD Entity"]
-        EMB["@Embeddable<br/>JPA Embeddable = DDD Value Object"]
-        TX["@Transactional<br/>事务边界 = 聚合一致性边界"]
-        DATA["Spring Data Repository<br/>接口即 Repository"]
-        APP_EVENT["ApplicationEvent + @EventListener<br/>= Domain Event"]
-        COMPONENT["@Service/@Component<br/>= Domain Service"]
-        FACT_BEAN["FactoryBean / @Bean 工厂方法<br/>= Factory"]
+    subgraph SPRING["Spring 对应"]
+        S1["@Entity<br/>标识 + 状态"]
+        S2["@Embeddable<br/>无标识值类型"]
+        S3["@Transactional<br/>事务边界"]
+        S4["JpaRepository<br/>接口即仓储"]
+        S5["ApplicationEvent<br/>发布-订阅"]
+        S6["@Service<br/>无状态逻辑"]
+        S7["@Bean / FactoryBean<br/>创建抽象"]
     end
 
-    ENTITY -.-> JPA
-    VO -.-> EMB
-    AGG -.-> TX
-    REPO -.-> DATA
-    EVENT -.-> APP_EVENT
-    SVC -.-> COMPONENT
-    FACTORY -.-> FACT_BEAN
+    E --> S1
+    V --> S2
+    A --> S3
+    R --> S4
+    DE --> S5
+    DS --> S6
+    F --> S7
 ```
 
-#### 24.11.1 聚合根与 @Transactional
-
-DDD 要求**一个事务只修改一个聚合**。Spring 的 `@Transactional` 天然做这件事：
+#### 24.11.3 Entity（实体）— 有唯一标识，可变
 
 ```java
-// ★ DDD 聚合根: Order 是聚合根, OrderLine 是聚合内部实体
+// DDD 实体: 有 ID, 有生命周期, 可变
 @Entity
-public class Order {                          // ← 聚合根
-    @Id private Long id;
-    @OneToMany(cascade = ALL, orphanRemoval = true)
-    private List<OrderLine> lines;           // ← 聚合内部
+@Table(name = "orders")
+public class Order {
+    @Id
+    @GeneratedValue
+    private Long id;                    // ★ 唯一标识
     
-    public void addLine(Product product, int qty) {
-        // ★ 聚合根控制所有内部修改
-        lines.add(new OrderLine(product, qty));
-        recalculateTotal();
+    private OrderStatus status;         // ★ 可变状态
+    
+    @Embedded
+    private Money totalAmount;          // ★ 值对象(无独立 ID)
+    
+    // ★ DDD 关键: 实体不暴露 setter, 通过行为方法修改
+    public void confirm() {
+        if (this.status != OrderStatus.PENDING) {
+            throw new IllegalStateException("只有待确认的订单才能确认");
+        }
+        this.status = OrderStatus.CONFIRMED;
     }
-}
-
-@Service
-@Transactional  // ★ 事务边界 = 聚合一致性边界
-public class OrderService {
-    public void addItem(Long orderId, Product product, int qty) {
-        Order order = orderRepo.findById(orderId);
-        order.addLine(product, qty);    // 聚合内部一致性由聚合根保证
-        // orderRepo.save(order);       // JPA 自动脏检查, 不需要显式 save
-    }
-    // ★ 一个事务只修改 Order 一个聚合, 不跨聚合修改
+    
+    // ❌ 反模式: public void setStatus(OrderStatus s)
+    // 会让业务逻辑散落到各处, 破坏聚合一致性
 }
 ```
 
-#### 24.11.2 Repository 模式
+#### 24.11.4 Value Object（值对象）— 无标识，不可变
 
 ```java
-// DDD 的 Repository: 只定义接口, 不关心实现
-// Spring Data 完美实现这一思想:
-
-// ★ 这就是 DDD Repository!
-public interface OrderRepository extends JpaRepository<Order, Long> {
-    // 方法名即查询意图, 不用写 SQL
-    List<Order> findByStatusAndCreatedAtAfter(OrderStatus status, LocalDateTime since);
+// ★ 值对象: 无 ID, 通过所有属性判断相等, 不可变
+@Embeddable
+public class Money {
+    private final BigDecimal amount;
+    private final Currency currency;
     
-    // @Query 用于复杂场景
-    @Query("SELECT o FROM Order o JOIN FETCH o.lines WHERE o.id = :id")
-    Optional<Order> findByIdWithLines(@Param("id") Long id);
+    // ★ DDD 要求: 值对象不可变 → 所有字段 final
+    public Money(BigDecimal amount, Currency currency) {
+        this.amount = amount;
+        this.currency = currency;
+    }
+    
+    // ★ 行为方法返回新实例, 不修改自身
+    public Money add(Money other) {
+        if (!this.currency.equals(other.currency)) {
+            throw new IllegalArgumentException("货币不一致");
+        }
+        return new Money(this.amount.add(other.amount), this.currency);
+    }
+    
+    public Money multiply(int factor) {
+        return new Money(this.amount.multiply(BigDecimal.valueOf(factor)), this.currency);
+    }
+    
+    @Override
+    public boolean equals(Object o) {
+        if (!(o instanceof Money m)) return false;
+        return amount.compareTo(m.amount) == 0 && currency.equals(m.currency);
+    }
+    
+    @Override
+    public int hashCode() {
+        return Objects.hash(amount, currency);
+    }
+    
+    // JPA 需要无参构造器 (可以是 protected)
+    protected Money() {}
 }
 ```
 
-#### 24.11.3 领域事件 → ApplicationEvent
+#### 24.11.5 Aggregate（聚合）— 一致性边界
+
+聚合是 DDD 中**最难也是最核心**的概念。Spring 用 `@Transactional` 实现聚合的一致性边界。
 
 ```java
-// DDD: 聚合产生领域事件, 其他模块监听
+// ★ 聚合根: Order
 @Entity
 public class Order {
-    // ★ 聚合根内部收集事件
-    @Transient
+    @Id private Long id;
+    
+    // ★ 聚合内部实体: OrderLine (不能脱离 Order 单独存在)
+    @OneToMany(cascade = ALL, orphanRemoval = true)
+    @JoinColumn(name = "order_id")
+    private List<OrderLine> lines = new ArrayList<>();
+    
+    @Embedded
+    private Money totalAmount = Money.zero();
+    
+    // ★ 聚合根对外暴露的只有行为方法, 不暴露 setter
+    public void addLine(Product product, int quantity) {
+        OrderLine line = new OrderLine(product.getId(), product.getPrice(), quantity);
+        lines.add(line);
+        recalculateTotal();  // 聚合内一致性由聚合根保证
+    }
+    
+    public void removeLine(Long productId) {
+        lines.removeIf(line -> line.getProductId().equals(productId));
+        recalculateTotal();
+    }
+    
+    private void recalculateTotal() {
+        this.totalAmount = lines.stream()
+            .map(OrderLine::subtotal)
+            .reduce(Money.zero(), Money::add);
+    }
+    
+    // ★ 只读访问: 返回不可变视图
+    public List<OrderLine> getLines() {
+        return Collections.unmodifiableList(lines);
+    }
+    
+    public Money getTotalAmount() { return totalAmount; }
+}
+
+// 聚合内部实体: 不能脱离 Order 被外部引用
+@Embeddable
+class OrderLine {
+    private Long productId;
+    private Money price;
+    private int quantity;
+    
+    Money subtotal() { return price.multiply(quantity); }
+    // getters...
+}
+```
+
+**聚合设计的四大原则（Spring 无关，DDD 本身）**：
+
+| 原则 | 含义 | 反例 |
+|------|------|------|
+| 小聚合 | 一个聚合尽量只包含根实体 | 把整个订单系统做成一个聚合 |
+| 通过 ID 引用其他聚合 | Order 引用 `Long userId`，不引用 `User` 对象 | `@ManyToOne User user` |
+| 一个事务只改一个聚合 | `@Transactional` 只操作一个聚合根 | 一次提交修改 Order + User + Product |
+| 最终一致性处理跨聚合 | 跨聚合用领域事件异步同步 | 用分布式事务同步 |
+
+#### 24.11.6 Repository — 聚合的"家"
+
+```java
+// ★ DDD Repository: 不暴露底层存储细节
+public interface OrderRepository {
+    Optional<Order> findById(Long id);
+    void save(Order order);
+    List<Order> findByCustomerId(Long customerId);
+}
+
+// Spring Data 实现: 接口即仓储
+public interface OrderRepository extends JpaRepository<Order, Long> {
+    // ★ 方法名表达查询意图
+    List<Order> findByCustomerIdAndStatus(Long customerId, OrderStatus status);
+    
+    // 复杂查询用 @Query
+    @Query("""
+        SELECT DISTINCT o FROM Order o 
+        JOIN FETCH o.lines 
+        WHERE o.customerId = :customerId
+        ORDER BY o.createdAt DESC
+        """)
+    List<Order> findCustomerOrdersWithLines(@Param("customerId") Long customerId);
+    
+    // 规约模式 Specification
+    List<Order> findAll(Specification<Order> spec);
+}
+```
+
+#### 24.11.7 Domain Event — 聚合发出，外部响应
+
+```java
+// ★ 聚合根内部收集事件
+@Entity
+public class Order {
+    @Id private Long id;
+    
+    @Transient  // JPA 不持久化
     private final List<Object> domainEvents = new ArrayList<>();
     
     public void confirm() {
         this.status = OrderStatus.CONFIRMED;
-        // ★ 发布领域事件
-        domainEvents.add(new OrderConfirmedEvent(this.id, this.totalAmount));
+        // ★ 聚合内部发布领域事件
+        domainEvents.add(new OrderConfirmed(this.id, this.totalAmount, this.customerId));
     }
     
-    public List<Object> getDomainEvents() { return domainEvents; }
+    public List<Object> getDomainEvents() {
+        return Collections.unmodifiableList(domainEvents);
+    }
+    
+    public void clearDomainEvents() {
+        domainEvents.clear();
+    }
 }
 
-// 基础设施层: 监听 Spring 事件
+// ★ 基础设施层: Spring AOP 拦截 Repository.save(), 自动发布事件
+@Aspect
 @Component
-public class OrderEventHandler {
+public class DomainEventPublisherAspect {
+    @Autowired private ApplicationEventPublisher publisher;
+    
+    @AfterReturning("execution(* com.example..*Repository.save(..))")
+    public void publishEvents(JoinPoint jp) {
+        Object aggregate = jp.getArgs()[0];
+        if (aggregate instanceof Order order) {
+            order.getDomainEvents().forEach(publisher::publishEvent);
+            order.clearDomainEvents();
+        }
+    }
+}
+
+// ★ 跨聚合通信: 只通过事件
+@Component
+public class InventoryEventHandler {
     @EventListener
-    public void onOrderConfirmed(OrderConfirmedEvent event) {
-        // 发送消息队列 / 邮件 / 审计日志
-        messageProducer.send("order.confirmed", event);
+    @TransactionalEventListener(phase = AFTER_COMMIT)  // ★ 事务提交后才处理
+    public void onOrderConfirmed(OrderConfirmed event) {
+        // 扣减库存 — 与 Order 不同聚合, 最终一致性
+        inventoryService.deductStock(event.getLines());
     }
 }
 ```
 
-#### 24.11.4 Spring Modulith — 显式模块边界
-
-DDD 强调**限界上下文**的隔离。Spring Modulith（Spring 生态）提供了显式模块验证：
+#### 24.11.8 Domain Service vs Application Service
 
 ```java
-// 模块结构: com.example.orders / com.example.payments / com.example.shipping
-// Modulith 自动验证模块间的依赖规则
-
-@Test
-void verifyModularity() {
-    // ★ 验证每个模块只暴露 public API, 内部不互相侵入
-    ApplicationModules.of(MyApplication.class).verify();
+// ★ Domain Service: 放"不属于任何实体"的领域逻辑
+@Service
+public class PricingService {  // 领域服务
+    public Money calculatePrice(Product product, Customer customer) {
+        // 定价逻辑: 查会员等级、优惠券、促销
+        Money base = product.getBasePrice();
+        Money discount = customer.getMembershipDiscount(base);
+        return base.subtract(discount);
+    }
 }
 
-// 模块间通过事件通信, 不直接调用
-@ApplicationModuleListener  // Modulith 增强的 @EventListener
-public void onOrderConfirmed(OrderConfirmedEvent event) {
-    // 跨模块通信只通过事件!
+// ★ Application Service: 编排, 无业务逻辑
+@Service
+@Transactional
+public class OrderApplicationService {  // 应用服务
+    public void placeOrder(PlaceOrderCommand cmd) {
+        // 1. 加载聚合
+        Customer customer = customerRepo.findById(cmd.getCustomerId()).orElseThrow();
+        Product product = productRepo.findById(cmd.getProductId()).orElseThrow();
+        
+        // 2. 调用领域服务（纯业务逻辑）
+        Money price = pricingService.calculatePrice(product, customer);
+        
+        // 3. 操作聚合
+        Order order = new Order(customer.getId());
+        order.addLine(product, cmd.getQuantity(), price);
+        
+        // 4. 持久化
+        orderRepo.save(order);
+        // AOP 自动发布 OrderConfirmed 事件
+    }
 }
 ```
 
-#### 24.11.5 Spring 对 DDD 的"不做"
+| 维度 | Domain Service | Application Service |
+|------|---------------|-------------------|
+| 有无状态 | 无状态 | 无状态 |
+| 有无事务 | **无事务** | **有事务** `@Transactional` |
+| 职责 | **领域逻辑**（计算/校验/策略） | **编排**（加载聚合→调用领域→持久化） |
+| 依赖 | 只依赖领域对象 | 依赖 Repository + Domain Service |
+| 被 Spring 管理 | `@Service` | `@Service` |
 
-| DDD 概念 | Spring 态度 | 原因 |
-|----------|-----------|------|
-| 聚合根显式标记 | ❌ 不内置 | 用 `@Entity` + 命名约定代替 |
-| 限界上下文 | ⚠️ Modulith 可选 | 用包结构 + Modulith 验证 |
-| 值对象不可变性 | ❌ 不强制 | 靠开发者自律 + `@Embeddable` |
-| 规约模式 Specification | ✅ 内置 | `JpaSpecificationExecutor` |
-| 事件溯源 Event Sourcing | ❌ 不内置 | 需 Axon Framework 等第三方 |
+#### 24.11.9 CQRS — 读写分离
 
-> Spring 的哲学：**提供基础设施但不强制架构范式**。你可以用 Spring 写 DDD，也可以写传统三层，也可以写 CQRS——Spring 不为任何一种范式"站队"。
+```java
+// ★ 命令模型 Command Model (写)
+@Entity
+public class Order { ... }  // 完整的聚合根
+public interface OrderRepository extends JpaRepository<Order, Long> { }
+
+// ★ 查询模型 Query Model (读) — 可以跨聚合
+@Data
+public class OrderSummary {  // 不是 @Entity, 纯 DTO
+    private Long orderId;
+    private String customerName;   // 来自 Customer 聚合
+    private Money totalAmount;
+    private List<OrderLineSummary> lines;
+    private String status;
+}
+
+// ★ 专用读仓储 — 直接 SQL 或 jOOQ
+@Repository
+public class OrderQueryRepository {
+    @Autowired private JdbcTemplate jdbc;
+    
+    public List<OrderSummary> findCustomerOrders(Long customerId) {
+        return jdbc.query("""
+            SELECT o.id, c.name as customer_name, o.total_amount, o.status,
+                   ol.product_id, ol.quantity, ol.price
+            FROM orders o
+            JOIN customers c ON o.customer_id = c.id
+            JOIN order_lines ol ON ol.order_id = o.id
+            WHERE o.customer_id = ?
+            ORDER BY o.created_at DESC
+            """,
+            new OrderSummaryRowMapper(),
+            customerId
+        );
+    }
+}
+```
+
+**CQRS 核心原则**：写操作走聚合 + Repository，读操作直接 SQL 跨表 JOIN。读不需要经过聚合根——DCI（领域概念）允许读直接跨聚合取数据。
+
+#### 24.11.10 六边形架构（端口-适配器）落地
+
+```mermaid
+flowchart TB
+    subgraph DRIVER["驱动侧 — 主动适配器"]
+        REST["@RestController<br/>REST API"]
+        MQ["@JmsListener<br/>消息队列"]
+        CLI["CommandLineRunner<br/>命令行"]
+    end
+
+    subgraph APP["应用层 — 端口（接口）"]
+        PORT_IN["OrderApplicationService<br/>（入站端口）"]
+        PORT_OUT["OrderRepository<br/>（出站端口）"]
+        EVT_PORT["EventPublisher<br/>（出站端口）"]
+    end
+
+    subgraph DOMAIN["领域层 — 纯 POJO"]
+        ENTITY["Order 聚合根<br/>OrderLine 内部实体"]
+        VO["Money 值对象"]
+        SVC["PricingService<br/>领域服务"]
+        EVENT["OrderConfirmed<br/>领域事件"]
+    end
+
+    subgraph DRIVEN["被驱动侧 — 被动适配器"]
+        JPA["JpaOrderRepository<br/>JPA 实现"]
+        RABBIT["RabbitMQEventPublisher<br/>消息队列实现"]
+        EMAIL["EmailEventPublisher<br/>邮件实现"]
+    end
+
+    subgraph INFRA["基础设施层"]
+        CONFIG["@Configuration<br/>依赖注入配置"]
+        TX["@Transactional<br/>事务管理"]
+    end
+
+    DRIVER --> PORT_IN
+    PORT_IN --> DOMAIN
+    DOMAIN --> PORT_OUT
+    DOMAIN --> EVT_PORT
+    PORT_OUT --> JPA
+    EVT_PORT --> RABBIT
+    EVT_PORT --> EMAIL
+    INFRA -.-> APP
+    INFRA -.-> DRIVEN
+```
+
+**关键规则**：**领域层零 Spring 依赖**！只有 `@Entity`、`@Embeddable` 是 JPA 注解（可选，也可以用 XML 映射），除此之外领域层是纯 POJO。
+
+```java
+// domain/Order.java — ★ 零 Spring 依赖
+public class Order {  // 不是 @Service, 不是 @Component
+    private Long id;
+    private List<OrderLine> lines;
+    // ... 纯业务逻辑
+}
+
+// ports/OrderRepository.java — ★ 接口在领域层, 实现在基础设施层
+public interface OrderRepository {
+    Optional<Order> findById(Long id);
+    void save(Order order);
+}
+
+// infrastructure/JpaOrderRepository.java — ★ 实现在基础设施层
+@Repository
+class JpaOrderRepository implements OrderRepository {
+    // JPA EntityManager / Spring Data
+}
+```
+
+#### 24.11.11 Spring Modulith — 显式模块化验证
+
+```java
+// 包结构:
+// com.example.orders      — 订单限界上下文
+// com.example.payments    — 支付限界上下文
+// com.example.shipping    — 物流限界上下文
+
+// ★ Modulith 自动验证模块边界
+@SpringBootTest
+class ModularityTest {
+    @Test
+    void verifyModules() {
+        ApplicationModules.of(MyApplication.class).verify();
+        // ★ 验证: 每个模块的包不互相侵入内部细节
+    }
+    
+    @Test
+    void paymentsShouldNotDependOnOrders() {
+        ApplicationModules.of(MyApplication.class)
+            .forEach(module -> {
+                // payments 模块不能直接调用 orders 的内部类
+                assertThat(module.getNamedInterfaces())
+                    .noneMatch(i -> i.getName().contains("orders.internal"));
+            });
+    }
+}
+
+// ★ 跨模块通信: 通过事件, 不直接调用
+// orders 模块内部:
+@ApplicationModuleListener  // Modulith 的增强 @EventListener
+void onPaymentConfirmed(PaymentConfirmedEvent event) {
+    order.confirmPayment(event.getOrderId(), event.getTransactionId());
+}
+```
+
+#### 24.11.12 实战项目结构
+
+```
+src/main/java/com/example/
+├── order/                          # ★ 订单限界上下文
+│   ├── domain/                     # 领域层 — 零框架依赖
+│   │   ├── Order.java              # 聚合根
+│   │   ├── OrderLine.java          # 聚合内部实体
+│   │   ├── Money.java              # 值对象
+│   │   ├── OrderConfirmed.java     # 领域事件（纯 POJO）
+│   │   └── PricingService.java     # 领域服务
+│   ├── application/                # 应用层
+│   │   └── OrderApplicationService.java
+│   ├── ports/                      # 端口（接口）
+│   │   ├── OrderRepository.java    # 出站端口
+│   │   └── OrderEventPublisher.java
+│   └── infrastructure/             # 基础设施层
+│       ├── JpaOrderRepository.java
+│       └── RabbitMQEventPublisher.java
+│
+├── payment/                        # ★ 支付限界上下文
+│   └── ... (同上结构)
+│
+├── shared/                         # 共享内核
+│   ├── Money.java                  # 如果多个上下文用同一个概念
+│   └── BaseEntity.java
+│
+└── config/                         # 全局配置
+    └── DomainEventPublisherConfig.java
+```
+
+#### 24.11.13 常见 DDD 反模式（在 Spring 中）
+
+| 反模式 | 表现 | 后果 | 修复 |
+|--------|------|------|------|
+| **贫血模型** | `@Entity` 只有 getter/setter，逻辑全在 Service | 领域逻辑散落各处，无法复用 | 把业务逻辑移到 `@Entity` 内部 |
+| **跨越聚合事务** | 一个 `@Transactional` 修改多个聚合根 | 数据不一致 | 拆分为多事务 + 领域事件 |
+| **Repository 返回 DTO** | `OrderRepository.findOrderSummary()` 返回 DTO | 混淆读写职责 | 写用 Repository 返回聚合，读用 QueryService 返回 DTO |
+| **领域层依赖 Spring** | `Order` 类中 `@Autowired` 注入 Repository | 领域对象变复杂，不可测试 | 通过 Application Service 注入，传给领域方法 |
+| **值对象可变** | `Money` 有 `setAmount()` 方法 | 共享引用被意外修改 | 所有字段 final，修改返回新实例 |
+
+#### 24.11.14 总结：Spring 对 DDD 的态度
+
+```
+DDD 是设计方法论，Spring 是基础设施——两者互补：
+  DDD 告诉你"代码怎么组织"（模块怎么拆、聚合怎么设计）
+  Spring 给你"工具怎么用"（DI 管理依赖、AOP 管理事务、Event 解耦通信）
+
+Spring 明确不做的事情：
+  1. 不强制聚合根标记 — 开发者自己决定
+  2. 不强制不可变性 — 靠开发规范
+  3. 不内置事件溯源 — 用 Axon 等第三方
+  4. 不限定架构风格 — 你可以用六边形、三层、CQRS、混杂
+```
+
+> Spring 的哲学：**提供基础设施但不强制架构范式**。Spring 给了你锤子和钉子，但房子怎么盖——是 DDD 告诉你的。
 
 ---
 
