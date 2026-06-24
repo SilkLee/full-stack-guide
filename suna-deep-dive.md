@@ -964,3 +964,136 @@ Kortix 的本质 = Git (版本化) + Docker (沙箱隔离) + Agent (AI 劳动力
   4. 开源自托管 — 零供应商锁定
   5. 多模型 — 不绑定任何 LLM 厂商
 ```
+
+---
+
+## 17. Continental 企业级 AWS 部署方案
+
+> **场景**：Continental 内部 AWS（法兰克福 eu-central-1），自托管，多团队，需过安全审计和 GDPR。
+
+### 17.1 AWS 部署架构
+
+```mermaid
+flowchart TB
+    subgraph VPC["Continental VPC - eu-central-1"]
+        ALB["ALB 负载均衡 - SSL + OIDC"]
+        ECS["ECS Fargate API × 3 - 跨 AZ"]
+        RDS["RDS PostgreSQL Multi-AZ - 加密"]
+        REDIS["ElastiCache Redis - 会话缓存"]
+        S3["S3 - 加密文件存储"]
+        SB["ECS EC2 沙箱 - 每会话独立 Task"]
+        ECR["ECR 企业镜像仓库"]
+    end
+    subgraph ENT["Continental 企业服务"]
+        SSO["Azure AD SSO"]
+        MODEL["内部 LLM 网关"]
+        SIEM["Splunk SIEM"]
+        GITLAB["内部 GitLab"]
+    end
+    ALB --> ECS --> RDS & REDIS & SB
+    SSO --> ALB
+    ECS --> MODEL & SIEM & GITLAB
+```
+
+### 17.2 Terraform 核心模块
+
+```hcl
+resource "aws_db_instance" "kortix" {
+  identifier     = "kortix-prod"
+  engine         = "postgres" ; engine_version = "16.4"
+  instance_class = "db.r6g.xlarge"
+  allocated_storage = 500 ; max_allocated_storage = 1000
+  storage_encrypted = true ; backup_retention_period = 30
+  multi_az = true ; deletion_protection = true
+}
+resource "aws_ecs_service" "api" {
+  launch_type = "FARGATE" ; desired_count = 3
+  deployment_controller { type = "CODE_DEPLOY" }
+}
+```
+
+### 17.3 GDPR 与安全合规
+
+| 要求 | 实现 |
+|------|------|
+| **数据驻留** | 全部 `eu-central-1`，不跨 Region |
+| **静态加密** | RDS + S3 SSE-KMS + ECR 全部加密 |
+| **传输加密** | ALB TLS 1.3 + VPC 内 mTLS |
+| **访问控制** | Azure AD OIDC SSO + IAM Roles |
+| **审计** | CloudTrail → Splunk SIEM |
+| **密钥** | AWS KMS 统一管理 |
+| **源码审计** | Source-Available，合规团队可审查 |
+
+### 17.4 多团队隔离
+
+```yaml
+accounts:
+  - team-braking      # 制动系统
+  - team-infotainment # 车载信息娱乐
+  - team-supply-chain # 供应链
+  - team-hr           # 人力资源
+```
+
+每个团队独立 Kortix project，独立 GitLab repo，沙箱间完全隔离。
+
+### 17.5 关键优化落地
+
+**1. 沙箱冷启动 → 企业预构建镜像**
+
+```dockerfile
+# Continental 基础镜像
+FROM ubuntu:24.04
+COPY continental-ca.crt /usr/local/share/ca-certificates/
+RUN update-ca-certificates && apt-get install -y \
+    python3.12 nodejs git curl sap-nwrfc-sdk
+RUN curl -fsSL https://kortix.com/install-sandbox-agent | bash
+```
+效果：5min → **90s** 冷启动，预热快照 → **8s**。
+
+**2. 接企业 LLM 网关**
+
+```typescript
+const continentalProvider = {
+  baseURL: 'https://llm-gateway.internal.continental.com/v1',
+  auth: () => ({ headers: { 'Authorization': `Bearer ${getAwsIamToken()}` } }),
+  audit: (req, res) => auditLog.llm({ team, model: req.model, tokens: res.usage }),
+};
+```
+
+**3. Agent 质量评估**
+
+```sql
+CREATE VIEW agent_performance AS
+SELECT agent_slug,
+  COUNT(*) as sessions,
+  ROUND(AVG(CASE WHEN cr.status='merged' THEN 1 ELSE 0 END),2) as merge_rate
+FROM sessions s LEFT JOIN change_requests cr ON cr.session_id = s.id
+GROUP BY agent_slug;
+```
+
+**4. 统一密钥管理 → AWS KMS**
+
+### 17.6 分阶段实施
+
+```mermaid
+flowchart LR
+    P0["Week 1-2 PoC"] --> P1["Week 3-5 单团队试点"]
+    P1 --> P2["Week 6-8 多团队推广"]
+    P2 --> P3["Week 9-12 全公司上线"]
+```
+
+### 17.7 月成本估算
+
+| 资源 | 月费 (€) |
+|------|----------|
+| RDS PostgreSQL Multi-AZ | ~450 |
+| ElastiCache Redis | ~60 |
+| ECS Fargate API × 3 | ~280 |
+| ECS EC2 Sandbox × 10 | ~600 |
+| ALB + S3 + KMS + 监控 | ~125 |
+| LLM 调用 | ~0（企业已有） |
+| **合计** | **~1,515** |
+
+---
+
+*全文 17 章，基于 Suna v0.9.5 源码分析 + Continental 企业部署方案编写。*
