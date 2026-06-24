@@ -998,34 +998,30 @@ flowchart TB
 
 **核心原则：Kortix 只做 Agent 编排 + 沙箱隔离 + 用户交互。LLM 网关、Skills 管理、MCP Tools 全部复用现有。**
 
-### 17.2 LiteLLM 集成 — Kortix 的 LLM Gateway 直接指向 LiteLLM
+### 17.2 LiteLLM 集成
+
+```mermaid
+flowchart LR
+    subgraph CONTINENTAL["Continental 内部自部署 LiteLLM"]
+        LITELLM_CORE["LiteLLM 网关<br/>路由/计费/限流/审计"]
+        AZURE["Azure OpenAI<br/>GPT-4o / GPT-4.1"]
+        AWS_BEDROCK["AWS Bedrock<br/>Claude 3.5/4 Sonnet<br/>Llama 3.3"]
+    end
+
+    KORTIX_SB["Kortix 沙箱"] -->|"LLM 请求"| LITELLM_CORE
+    LITELLM_CORE --> AZURE
+    LITELLM_CORE --> AWS_BEDROCK
+```
+
+**关键点**：LiteLLM 是 Continental 内部自部署（非 SaaS），统一管理 Azure OpenAI 和 AWS Bedrock 上的基础大模型。Kortix 只需要指向 `https://litellm.internal.continental.com/v1`，模型选择、计费、限流全部由 LiteLLM 处理。
 
 ```typescript
-// Kortix 的 LLM Gateway 配置 → 指向 Continental LiteLLM
-// 不需要 Kortix 自带的 LLM Gateway 计费/加价逻辑
-// 因为 LiteLLM 已有这些能力
-
-// apps/api/.env
+// Kortix 的 LLM Gateway 配置 → 指向内部 LiteLLM
 LLM_GATEWAY_BASE_URL=https://litellm.internal.continental.com/v1
-LLM_GATEWAY_ENABLED=true
-// LiteLLM 已处理: 模型路由、计费、限流、审计
-// Kortix 只做: 沙箱 Token → 用户身份映射 → 转发请求
-
-// Kortix LLM Gateway 简化为透传代理:
-const continentalLlmProxy = {
-  baseURL: config.LLM_GATEWAY_BASE_URL,
-  authenticateToken: async (token) => {
-    // ★ 沙箱 Token → Continental 用户身份
-    const user = await validateAccountToken(token);
-    return {
-      userId: user.userId,
-      teamId: user.accountId,  // 对应 Continental 团队
-      // LiteLLM 用 teamId 做内部计费拆分
-    };
-  },
-  // ★ 不再需要 recordUsage: LiteLLM 自己记录
-  // ★ 不再需要 markup: LiteLLM 自己定价
-};
+// LiteLLM 已配置:
+//   - Azure OpenAI: GPT-4o, GPT-4.1
+//   - AWS Bedrock: Claude 3.5 Sonnet, Claude 4 Sonnet, Llama 3.3
+// Kortix Agent 只需指定模型名，LiteLLM 自动路由到对应云
 ```
 
 ### 17.3 中央 Skills 管理平台集成
