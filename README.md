@@ -6,3 +6,4 @@
 | [📖 jdk-core-deep-dive.md](jdk-core-deep-dive.md) | 23 | JUC / Collections & Stream / IO-NIO-AIO / Thread / 反射 / 泛型 / SPI / MethodHandle |
 | [📖 jvm-source-deep-dive.md](jvm-source-deep-dive.md) | 19 | HotSpot JVM 架构 / GC 7 种收集器 / JIT / 字节码 / 调优 |
 | [📖 database-deep-dive.md](database-deep-dive.md) | 29 | MySQL InnoDB (17章) + PostgreSQL (12章) 双核深度对比 |
+| [📖 suna-deep-dive.md](suna-deep-dive.md) | 15 | Kortix/Suna AI Agent 平台源码级分析 — 业务架构 + 技术架构 |
