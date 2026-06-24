@@ -22,7 +22,7 @@
 - [14. 业务架构深度解析](#14-业务架构深度解析)
 - [15. 技术架构深度解析](#15-技术架构深度解析)
 - [16. 架构总结](#16-架构总结)
-- [17. Continental 企业级 AWS 部署方案](#17-continental-企业级-aws-部署方案)
+- [17. AutoCorp 企业级 AWS 部署方案](#17-autocorp-企业级-aws-部署方案)
 
 ---
 
@@ -968,15 +968,15 @@ Kortix 的本质 = Git (版本化) + Docker (沙箱隔离) + Agent (AI 劳动力
 
 ---
 
-## 17. Continental 企业级 AWS 部署方案
+## 17. AutoCorp 企业级 AWS 部署方案
 
-> **场景**：Continental 内部 AWS（法兰克福 eu-central-1），自托管，多团队。公司已有 **LiteLLM 网关**、**中央 Skills 管理平台**、**内部 MCP Server**——Kortix 作为 Agent 编排层集成这些现有基础设施。
+> **场景**：AutoCorp 内部 AWS（法兰克福 eu-central-1），自托管，多团队。公司已有 **LiteLLM 网关**、**中央 Skills 管理平台**、**内部 MCP Server**——Kortix 作为 Agent 编排层集成这些现有基础设施。
 
 ### 17.1 已有基础设施 vs Kortix 职责边界
 
 ```mermaid
 flowchart TB
-    subgraph EXISTING["Continental 已有基础设施 — 不动"]
+    subgraph EXISTING["AutoCorp 已有基础设施 — 不动"]
         LITELLM["LiteLLM 网关<br/>统一 100+ 模型路由<br/>已有计费 + 限流 + 审计"]
         SKILLS_PLATFORM["中央 Skills 管理平台<br/>公司级 Skills 注册/版本/审批<br/>已有 RBAC + CI/CD"]
         MCP["内部 MCP Server<br/>SAP / PLM / Jira / GitLab<br/>已封装为 MCP Tools"]
@@ -1003,7 +1003,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    subgraph CONTINENTAL["Continental 内部自部署 LiteLLM"]
+    subgraph AUTOCORP["AutoCorp 内部自部署 LiteLLM"]
         LITELLM_CORE["LiteLLM 网关<br/>路由/计费/限流/审计"]
         AZURE["Azure OpenAI<br/>GPT-4o / GPT-4.1"]
         AWS_BEDROCK["AWS Bedrock<br/>Claude 3.5/4 Sonnet<br/>Llama 3.3"]
@@ -1014,11 +1014,11 @@ flowchart LR
     LITELLM_CORE --> AWS_BEDROCK
 ```
 
-**关键点**：LiteLLM 是 Continental 内部自部署（非 SaaS），统一管理 Azure OpenAI 和 AWS Bedrock 上的基础大模型。Kortix 只需要指向 `https://litellm.internal.continental.com/v1`，模型选择、计费、限流全部由 LiteLLM 处理。
+**关键点**：LiteLLM 是 AutoCorp 内部自部署（非 SaaS），统一管理 Azure OpenAI 和 AWS Bedrock 上的基础大模型。Kortix 只需要指向 `https://litellm.internal.autocorp.com/v1`，模型选择、计费、限流全部由 LiteLLM 处理。
 
 ```typescript
 // Kortix 的 LLM Gateway 配置 → 指向内部 LiteLLM
-LLM_GATEWAY_BASE_URL=https://litellm.internal.continental.com/v1
+LLM_GATEWAY_BASE_URL=https://litellm.internal.autocorp.com/v1
 // LiteLLM 已配置:
 //   - Azure OpenAI: GPT-4o, GPT-4.1
 //   - AWS Bedrock: Claude 3.5 Sonnet, Claude 4 Sonnet, Llama 3.3
@@ -1028,7 +1028,7 @@ LLM_GATEWAY_BASE_URL=https://litellm.internal.continental.com/v1
 ### 17.3 中央 Skills 管理平台集成
 
 ```yaml
-# Continental 的 Skills 管理平台（已有）:
+# AutoCorp 的 Skills 管理平台（已有）:
 
 # Skills 生命周期:
   register → review → approve → version → publish → monitor
@@ -1064,7 +1064,7 @@ sequenceDiagram
 ```toml
 # kortix.toml — Skills 不再本地维护，改为引用中央平台
 [skills]
-source = "https://skills.internal.continental.com"
+source = "https://skills.internal.autocorp.com"
 subscriptions = [
   { slug = "sap-query", version = "1.3.2" },
   { slug = "compliance-check", version = "2.0.0" },
@@ -1077,7 +1077,7 @@ subscriptions = [
 
 ```mermaid
 flowchart LR
-    subgraph MCP_SERVERS["Continental MCP Servers"]
+    subgraph MCP_SERVERS["AutoCorp MCP Servers"]
         MCP_SAP["mcp-sap<br/>SAP RFC/BAPI 调用"]
         MCP_PLM["mcp-plm<br/>Teamcenter 产品数据"]
         MCP_JIRA["mcp-jira<br/>内部 Jira 工单"]
@@ -1101,17 +1101,17 @@ flowchart LR
 # kortix.toml — MCP 工具配置
 [[mcp_servers]]
 name = "sap"
-url = "https://mcp-sap.internal.continental.com"
+url = "https://mcp-sap.internal.autocorp.com"
 # MCP Server 自己处理认证和权限
 # Agent 调用时自动注入沙箱 Token
 
 [[mcp_servers]]
 name = "plm"
-url = "https://mcp-plm.internal.continental.com"
+url = "https://mcp-plm.internal.autocorp.com"
 
 [[mcp_servers]]
 name = "jira"
-url = "https://mcp-jira.internal.continental.com"
+url = "https://mcp-jira.internal.autocorp.com"
 ```
 
 **关键变化**：Kortix 原生的 Connectors（Pipedream、OAuth 等）基本不再需要。所有外部系统通过 MCP Server 统一暴露。
@@ -1120,7 +1120,7 @@ url = "https://mcp-jira.internal.continental.com"
 
 ```mermaid
 flowchart TB
-    subgraph VPC["Continental VPC - eu-central-1"]
+    subgraph VPC["AutoCorp VPC - eu-central-1"]
         ALB["ALB - SSL + OIDC"]
         ECS["ECS Fargate API × 3"]
         RDS["RDS PostgreSQL - Kortix 元数据"]
@@ -1159,7 +1159,7 @@ flowchart TB
 | LiteLLM / Skills / MCP | ~0 | **已有** |
 | **合计** | **~1,515** | LLM 网关和 Skills 省了 |
 
-**备注**：因为 LiteLLM、Skills 平台、MCP Server 都是 Continental 已有基础设施，Kortix 只需要部署 Agent 编排层和数据层，成本更低、集成更快。
+**备注**：因为 LiteLLM、Skills 平台、MCP Server 都是 AutoCorp 已有基础设施，Kortix 只需要部署 Agent 编排层和数据层，成本更低、集成更快。
 
 ### 17.7 分阶段实施（更新）
 
@@ -1179,7 +1179,7 @@ flowchart LR
 
 ### 17.8 Kortix 定制点总结
 
-| 组件 | Kortix 原始 | Continental 定制 |
+| 组件 | Kortix 原始 | AutoCorp 定制 |
 |------|-----------|-----------------|
 | LLM 网关 | 自建 Gateway + 计费 | **指向 LiteLLM，透传模式** |
 | Skills | `.kortix/opencode/skills/` 本地文件 | **从中央 Skills 平台订阅 + 版本锁定** |
@@ -1191,4 +1191,4 @@ flowchart LR
 
 ---
 
-*全文 17 章，基于 Suna v0.9.5 源码分析 + Continental 企业部署方案编写。*
+*全文 17 章，基于 Suna v0.9.5 源码分析 + AutoCorp 企业部署方案编写。*
