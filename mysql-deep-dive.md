@@ -19,6 +19,10 @@
 - [11. 主从复制与读写分离](#11-主从复制与读写分离)
 - [12. 分库分表](#12-分库分表)
 - [13. 面试真题与陷阱](#13-面试真题与陷阱)
+- [14. InnoDB 进阶机制](#14-innodb-进阶机制)
+- [15. MySQL 8.0 关键新特性](#15-mysql-80-关键新特性)
+- [16. 设计哲学与权衡](#16-设计哲学与权衡)
+- [17. 实战案例](#17-实战案例)
 
 ---
 
@@ -769,4 +773,355 @@ UPDATE users SET status = 'DONE' WHERE id = 1;
 
 ---
 
-*全文 13 章，基于 MySQL 8.0 / InnoDB 编写。*
+*全文 17 章，基于 MySQL 8.0 / InnoDB 编写。*
+
+---
+
+## 14. InnoDB 进阶机制
+
+### 14.1 Double Write Buffer — 部分写失效的最后防线
+
+InnoDB 页是 16KB，但磁盘扇区通常是 512B 或 4KB。如果一个 16KB 页的写入只完成了一半就断电——这个页就被"写花"了。**Redo Log 恢复不了这种情况**（Redo 记录的是"page 100 改成 Jerry"的物理操作，但如果 page 100 本身已损坏，重做也没用）。
+
+```mermaid
+flowchart TB
+    BUFFER["Buffer Pool 脏页"] --> DW["1. 先顺序写 Double Write Buffer<br/>128 页 × 16KB = 2MB<br/>★ 顺序写, 很快!"]
+    DW --> DISK["2. 再随机写入实际 .ibd 位置<br/>★ 这就是普通写"]
+    
+    NOTE["★ 崩溃恢复时:<br/>检查 Double Write Buffer 和实际页<br/>如果不一致 → 用 Double Write Buffer 的副本覆盖"]
+```
+
+```sql
+-- 查看 Double Write 状态
+SHOW GLOBAL STATUS LIKE '%dblwr%';
+-- Innodb_dblwr_pages_written: double write 写入的页数
+-- Innodb_dblwr_writes: double write 操作次数
+```
+
+### 14.2 Change Buffer — 写缓存的加速器
+
+当修改二级索引页时，如果该页**不在 Buffer Pool 中**，InnoDB 不会立刻读磁盘获取该页，而是把修改操作缓存在 Change Buffer 中。该页被读取时，再把 Change Buffer 中的修改合并（merge）到页中。
+
+```mermaid
+flowchart LR
+    UPDATE["UPDATE SET name='Jerry'<br/>WHERE id=1"] --> CHECK{"idx_name 的页<br/>在 Buffer Pool 吗?"}
+    CHECK -->|"在"| DIRECT["直接修改页"]
+    CHECK -->|"不在"| CB["★ 写入 Change Buffer<br/>不需要读磁盘!"]
+    
+    READ["后续 SELECT 需要此页"] --> MERGE["★ merge: 读磁盘 + 应用 Change Buffer 中的修改"]
+    CB --> MERGE
+```
+
+```sql
+-- Change Buffer 生效条件:
+-- 1. ★ 只对非唯一二级索引生效
+--    (唯一索引需要检查唯一性 → 必须读磁盘)
+-- 2. 页不在 Buffer Pool 中
+-- 3. 写多读少的场景收益最大
+
+-- 查看 Change Buffer 状态
+SHOW ENGINE INNODB STATUS\G
+-- INSERT BUFFER AND ADAPTIVE HASH INDEX 部分
+```
+
+### 14.3 Buffer Pool 三大链表
+
+```mermaid
+flowchart TB
+    subgraph BP["Buffer Pool"]
+        FREE["Free List<br/>★ 空闲页链表<br/>新读入的页从这取"]
+        LRU["LRU List<br/>★ 已使用页链表<br/>按最近使用排序<br/>5/8 区分为 young/old"]
+        FLUSH["Flush List<br/>★ 脏页链表<br/>按 oldest_modification 排序<br/>Checkpoint 时刷盘"]
+    end
+    
+    DISK_READ["磁盘读页"] --> FREE
+    FREE -->|"被使用"| LRU
+    LRU -->|"被修改"| FLUSH
+    FLUSH -->|"Checkpoint 刷盘"| CLEAN["变干净, 留在 LRU"]
+```
+
+```sql
+-- Buffer Pool 调优
+-- innodb_buffer_pool_size: 总大小 (推荐物理内存 50-80%)
+-- innodb_buffer_pool_instances: 拆成多个实例减少竞争 (≥4)
+-- innodb_old_blocks_pct: LRU 中 old 区比例 (默认 37%)
+-- innodb_old_blocks_time: 进入 old 区后 1 秒内被访问不算"热", 不移入 young
+
+-- innodb_buffer_pool_size = 8G, innodb_buffer_pool_instances = 8
+-- → 每个实例 1G, 减少 Buffer Pool mutex 竞争
+```
+
+### 14.4 Adaptive Hash Index — B+Tree 上的自动哈希
+
+InnoDB 会监控 B+Tree 的查询模式。如果某个索引被**等值查询频繁访问**，自动为该索引页构建哈希表——把 B+Tree 的 O(log n) 降为 O(1)。
+
+```sql
+-- 自动生效, 无需配置
+-- 条件: 等值查询频繁, 且查询模式稳定
+
+-- 查看 AHI 状态
+SHOW ENGINE INNODB STATUS\G
+-- 找到 "INSERT BUFFER AND ADAPTIVE HASH INDEX"
+-- Hash table size: 34679, node heap: 2330 buffer(s)
+
+-- ★ 关闭(极少需要, 除非遇到 AHI 锁竞争):
+-- SET GLOBAL innodb_adaptive_hash_index = OFF;
+```
+
+### 14.5 Purge 线程 — MVCC 的"保洁员"
+
+```mermaid
+sequenceDiagram
+    participant TX as 事务
+    participant UNDO as Undo Log
+    participant PURGE as Purge 线程
+    participant IDX as 二级索引
+
+    TX->>TX: DELETE FROM t WHERE id=1
+    Note over TX: 标记 delete_flag=1<br/>不物理删除!
+    TX->>TX: COMMIT
+    
+    Note over TX: 事务提交后
+    Note over UNDO: Undo Log 中的旧版本<br/>不再被任何事务需要
+    
+    Note over PURGE: ★ 后台 Purge 线程
+    PURGE->>UNDO: 清理不再需要的 Undo Log
+    PURGE->>IDX: 物理删除标记的记录
+    Note over PURGE: 不需要抢锁, 不影响前台查询!
+```
+
+```sql
+-- ★ 长事务的危害:
+-- 事务 A 一直不提交 → ReadView 一直持有 → 
+-- Purge 线程无法清理此 ReadView 之后的 Undo Log →
+-- Undo 表空间无限膨胀 → 查询遍历长版本链 → 变慢!
+
+-- 监控:
+SELECT trx_id, trx_started, TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS sec
+FROM information_schema.innodb_trx
+WHERE TIMESTAMPDIFF(SECOND, trx_started, NOW()) > 60;
+-- ★ 超过 60 秒未提交的事务 → 告警!
+```
+
+---
+
+## 15. MySQL 8.0 关键新特性
+
+| 特性 | 8.0 之前 | 8.0 | 收益 |
+|------|---------|-----|------|
+| **Hash Join** | 仅 BNL | ★ `t1 JOIN t2 ON t1.a=t2.b` 用 Hash Join | 等值 Join 快 10x |
+| **降序索引** | 忽略 DESC, 排序需 filesort | ★ `INDEX idx(a ASC, b DESC)` 真正生效 | 避免 filesort |
+| **不可见索引** | 只能删除索引测试 | ★ `ALTER INDEX idx INVISIBLE` | 安全测试索引效果 |
+| **直方图统计** | 仅基数统计 | ★ `ANALYZE TABLE t UPDATE HISTOGRAM` | 优化器选择更精准 |
+| **原子 DDL** | `TRUNCATE` 半路崩溃 → 表损坏 | ★ 原子化, 要么全成功要么全回滚 | 崩溃安全 |
+| **NOWAIT / SKIP LOCKED** | 锁等待只能阻塞 | ★ `SELECT ... FOR UPDATE NOWAIT` | 秒杀/抢购场景 |
+| **窗口函数** | 靠子查询自 Join | ★ `ROW_NUMBER() OVER(PARTITION BY dept ORDER BY salary DESC)` | 复杂分析一行 SQL |
+| **JSON_TABLE** | JSON 只能简单查询 | ★ 将 JSON 数组转为关系表 | 与 SQL 无缝互操作 |
+| **角色管理** | 无 | ★ `CREATE ROLE / GRANT ROLE` | 权限管理更灵活 |
+
+```sql
+-- 降序索引示例
+CREATE INDEX idx_created_desc ON orders(created_at DESC);
+
+-- 不可见索引: 测试删除索引的影响
+ALTER INDEX idx_name INVISIBLE;
+-- 观察性能... 如果 OK:
+ALTER INDEX idx_name VISIBLE;  -- 恢复, 或 DROP INDEX
+
+-- 窗口函数: 每个部门工资排名
+SELECT dept, name, salary,
+       ROW_NUMBER() OVER(PARTITION BY dept ORDER BY salary DESC) AS rnk
+FROM employees;
+
+-- NOWAIT: 秒杀不下单
+SELECT stock FROM products WHERE id = 100 FOR UPDATE NOWAIT;
+-- 如果被锁 → 立即报错, 不用等!
+```
+
+---
+
+## 16. 设计哲学与权衡
+
+### 16.1 为什么选择 B+Tree 作为默认索引？
+
+```
+磁盘的特性决定了数据库索引的选择:
+  - 顺序读写: 100MB/s
+  - 随机读写: 1MB/s  ← ★ 100 倍差距!
+
+B+Tree 的优势:
+  1. 高度极低 (3层 ≈ 2000万行) → 磁盘IO次数少
+  2. 叶子层双向链表 → 范围查询只需要一次定位 + 顺序遍历
+  3. 非叶子节点只存 key → 一个页能存更多索引项 → 树更矮
+
+对比:
+  - 哈希: O(1) 但范围查询要全表 → 数据库查询 90% 是范围
+  - 红黑树: O(log n) 但高度大 → 100万行需要20层 → 20次随机IO ❌
+```
+
+### 16.2 为什么选择 MVCC 而不是简单的读写锁？
+
+```
+方案 A: 读写锁
+  - 读锁: 查询时加 S 锁 → 其他事务不能写 → 并发差
+  - 写锁: 修改时加 X 锁 → 其他事务不能读写 → 吞吐量低
+
+方案 B: MVCC (InnoDB的选择)
+  - 读: 基于快照版本, ★ 不需要加锁 → 写不阻塞读
+  - 写: 创建新版本, 旧版本保留给正在读的事务
+  - 代价: 需要 Undo Log 存储旧版本 → 空间换并发
+  - 收益: 读并发提升 100x+
+```
+
+### 16.3 为什么需要 WAL（Write-Ahead Logging）？
+
+```
+问题: 修改一个页需要:
+  1. 读磁盘 (随机IO, 慢)
+  2. 修改内存
+  3. 写回磁盘 (随机IO, 慢)
+
+WAL 的思路:
+  1. 修改内存 (快)
+  2. 写 Redo Log (顺序IO, ★ 100x 快!)
+  3. 返回"事务已提交"
+  4. 后台慢慢将脏页刷回磁盘 (不阻塞事务)
+
+关键洞察: 顺序写 100 倍于随机写
+  Redo Log 是顺序写 → 事务提交很快
+  数据文件是随机写 → 后台慢慢做
+```
+
+### 16.4 为什么 MySQL 8.0 移除查询缓存？
+
+```
+问题: 查询缓存失效太频繁!
+  - 表上任何修改 → 整表缓存全部失效
+  - 高并发写入的表 → 缓存命中率几乎为 0
+  - 缓存锁竞争 → MySQL 5.7 默认禁用
+
+替代方案:
+  - 应用层缓存 (Redis)
+  - 更精细的控制粒度
+  - 对只读表/配置表仍有价值 → 用 Redis 替代
+```
+
+### 16.5 为什么两阶段提交？
+
+```mermaid
+flowchart LR
+    A["先写 Redo 后写 Binlog"] --> A1["崩溃在 Binlog 前<br/>主库 Redo 恢复了 → 数据在<br/>从库 Binlog 没有 → 数据丢失 ❌"]
+    B["先写 Binlog 后写 Redo"] --> B1["崩溃在 Redo 前<br/>从库 Binlog 有了 → 数据在<br/>主库 Redo 没恢复 → 数据丢失 ❌"]
+    
+    C["两阶段提交"] --> C1["★ Binlog 写入成功 + Redo Commit → 主从一致 ✅"]
+    C --> C2["Binlog 未写入 → Redo 标记 prepare 但没 commit → 回滚 ✅"]
+```
+
+### 16.6 设计决策速查
+
+| 决策 | 原因 | 代价 |
+|------|------|------|
+| B+Tree | 减少磁盘 IO + 范围查询快 | 插入可能页分裂 |
+| MVCC | 读写不互斥, 高并发 | Undo Log 空间开销 |
+| WAL | 顺序写快 100x | Redo Log 大小需合理配置 |
+| 两阶段提交 | 主从一致性 | 多一次 fsync |
+| 移除查询缓存 | 高并发写入时缓存失效严重 | 丢失简单场景的加速 |
+| Double Write | 防止部分写失效 | 每次写多写一次（但顺序写, 开销小） |
+
+---
+
+## 17. 实战案例
+
+### 案例 1: 慢查询优化 — 从 5 秒到 3 毫秒
+
+```sql
+-- 原 SQL (5秒)
+SELECT * FROM orders
+WHERE YEAR(created_at) = 2024 AND status = 'PAID'
+ORDER BY amount DESC LIMIT 20;
+
+-- Explain 输出:
+-- type: ALL, rows: 5000000, Extra: Using where; Using filesort
+
+-- ★ 问题: YEAR() 导致索引失效 + SELECT * + filesort
+-- 优化:
+-- 1. 建联合索引
+CREATE INDEX idx_created_status_amount ON orders(created_at, status, amount);
+
+-- 2. 改 SQL
+SELECT id, order_no, amount, created_at FROM orders
+WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01'
+  AND status = 'PAID'
+ORDER BY amount DESC LIMIT 20;
+
+-- 重新 Explain:
+-- type: range, rows: 25000, Extra: Using index condition
+-- 执行时间: 3ms ← ★ 快 1600x!
+```
+
+### 案例 2: 长事务导致的性能雪崩
+
+```sql
+-- 现象: 应用响应突然从 10ms 飙升到 2s, QPS 骤降
+
+-- 排查:
+-- 1. 查看当前事务
+SELECT * FROM information_schema.innodb_trx\G
+-- 发现一个事务运行了 3600 秒! (1小时前开始的)
+
+-- 2. 查看锁等待
+SELECT * FROM performance_schema.data_lock_waits;
+
+-- ★ 根因: 定时任务开了事务忘记提交
+-- START TRANSACTION; ...大批量操作... -- 忘了 COMMIT!
+
+-- 3. Kill 长事务
+SELECT CONCAT('KILL ', trx_mysql_thread_id, ';')
+FROM information_schema.innodb_trx
+WHERE TIMESTAMPDIFF(SECOND, trx_started, NOW()) > 300;
+
+-- ★ 预防:
+-- innodb_trx: 监控长事务 > 60 秒 → 告警
+-- 代码规范: @Transactional 方法不要做 IO/网络调用
+```
+
+### 案例 3: Join 从 30 秒到 50 毫秒
+
+```sql
+-- 原 SQL (30秒)
+SELECT u.name, COUNT(o.id)
+FROM users u LEFT JOIN orders o ON u.id = o.user_id
+GROUP BY u.id;
+
+-- Explain:
+-- users: 10万行, orders: 500万行
+-- Using join buffer (Block Nested Loop)  ← ★ 没走索引!
+
+-- 排查: orders.user_id 没索引!
+CREATE INDEX idx_orders_user_id ON orders(user_id);
+
+-- 重新 Explain:
+-- users: type=index (全索引扫描, 可接受)
+-- orders: type=ref, key=idx_orders_user_id  ← ★ 走索引了!
+-- 执行时间: 50ms ← ★ 快 600x!
+```
+
+### 案例 4: 分页优化
+
+```sql
+-- 场景: 后台管理系统, 按创建时间倒序翻页, 共 500 万行
+
+-- ❌ 第 1000 页 (5秒)
+SELECT * FROM orders ORDER BY created_at DESC LIMIT 10000, 20;
+
+-- ✅ 方案 1: 游标分页 (10ms)
+-- 第 1 页: SELECT * FROM orders ORDER BY created_at DESC, id DESC LIMIT 20;
+-- 前端记录最后一条: created_at='2024-01-15 10:00:00', id=1000
+-- 第 2 页: 
+SELECT * FROM orders 
+WHERE (created_at, id) < ('2024-01-15 10:00:00', 1000)
+ORDER BY created_at DESC, id DESC LIMIT 20;
+-- ★ 需要联合索引: INDEX idx_created_id(created_at, id)
+```
+
+
