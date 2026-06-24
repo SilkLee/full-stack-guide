@@ -969,130 +969,228 @@ Kortix 的本质 = Git (版本化) + Docker (沙箱隔离) + Agent (AI 劳动力
 
 ## 17. Continental 企业级 AWS 部署方案
 
-> **场景**：Continental 内部 AWS（法兰克福 eu-central-1），自托管，多团队，需过安全审计和 GDPR。
+> **场景**：Continental 内部 AWS（法兰克福 eu-central-1），自托管，多团队。公司已有 **LiteLLM 网关**、**中央 Skills 管理平台**、**内部 MCP Server**——Kortix 作为 Agent 编排层集成这些现有基础设施。
 
-### 17.1 AWS 部署架构
+### 17.1 已有基础设施 vs Kortix 职责边界
+
+```mermaid
+flowchart TB
+    subgraph EXISTING["Continental 已有基础设施 — 不动"]
+        LITELLM["LiteLLM 网关<br/>统一 100+ 模型路由<br/>已有计费 + 限流 + 审计"]
+        SKILLS_PLATFORM["中央 Skills 管理平台<br/>公司级 Skills 注册/版本/审批<br/>已有 RBAC + CI/CD"]
+        MCP["内部 MCP Server<br/>SAP / PLM / Jira / GitLab<br/>已封装为 MCP Tools"]
+        SSO["Azure AD SSO<br/>已有 OIDC"]
+        SIEM["Splunk SIEM<br/>已有审计接入"]
+    end
+
+    subgraph KORTIX["Kortix — 集成层，不重复造轮子"]
+        AGENT["Agent 编排<br/>会话管理 + Git 工作流 + CR"]
+        SANDBOX["Docker 沙箱<br/>每个会话独立隔离"]
+        FRONTEND["Web Dashboard + Slack Bot<br/>用户交互层"]
+    end
+
+    KORTIX -->|"模型调用"| LITELLM
+    KORTIX -->|"Skills 同步"| SKILLS_PLATFORM
+    KORTIX -->|"工具调用"| MCP
+    KORTIX -->|"认证"| SSO
+    KORTIX -->|"日志"| SIEM
+```
+
+**核心原则：Kortix 只做 Agent 编排 + 沙箱隔离 + 用户交互。LLM 网关、Skills 管理、MCP Tools 全部复用现有。**
+
+### 17.2 LiteLLM 集成 — Kortix 的 LLM Gateway 直接指向 LiteLLM
+
+```typescript
+// Kortix 的 LLM Gateway 配置 → 指向 Continental LiteLLM
+// 不需要 Kortix 自带的 LLM Gateway 计费/加价逻辑
+// 因为 LiteLLM 已有这些能力
+
+// apps/api/.env
+LLM_GATEWAY_BASE_URL=https://litellm.internal.continental.com/v1
+LLM_GATEWAY_ENABLED=true
+// LiteLLM 已处理: 模型路由、计费、限流、审计
+// Kortix 只做: 沙箱 Token → 用户身份映射 → 转发请求
+
+// Kortix LLM Gateway 简化为透传代理:
+const continentalLlmProxy = {
+  baseURL: config.LLM_GATEWAY_BASE_URL,
+  authenticateToken: async (token) => {
+    // ★ 沙箱 Token → Continental 用户身份
+    const user = await validateAccountToken(token);
+    return {
+      userId: user.userId,
+      teamId: user.accountId,  // 对应 Continental 团队
+      // LiteLLM 用 teamId 做内部计费拆分
+    };
+  },
+  // ★ 不再需要 recordUsage: LiteLLM 自己记录
+  // ★ 不再需要 markup: LiteLLM 自己定价
+};
+```
+
+### 17.3 中央 Skills 管理平台集成
+
+```yaml
+# Continental 的 Skills 管理平台（已有）:
+
+# Skills 生命周期:
+  register → review → approve → version → publish → monitor
+
+# Kortix 的集成方式:
+  # 1. Kortix 不再维护自己的 .kortix/opencode/skills/
+  # 2. 沙箱启动时从中央 Skills 平台拉取已审批的 Skills
+  # 3. Skills 有版本号，沙箱锁定版本
+```
+
+```mermaid
+sequenceDiagram
+    participant Dev as 开发者
+    participant SkillsPlatform as 中央 Skills 平台
+    participant Kortix as Kortix
+    participant Sandbox as 沙箱
+
+    Dev->>SkillsPlatform: 提交新 Skill v1.0
+    SkillsPlatform->>SkillsPlatform: 安全审查 + 审批
+    SkillsPlatform->>SkillsPlatform: 发布 v1.0
+
+    Note over Kortix: 配置项目使用的 Skills
+    Kortix->>SkillsPlatform: 订阅 Skills: sap-query@v1, compliance-check@v2
+
+    Note over Sandbox: 沙箱启动时
+    Sandbox->>SkillsPlatform: 拉取已订阅 Skills（指定版本）
+    SkillsPlatform-->>Sandbox: Skill 包（Markdown + 脚本）
+    Sandbox->>Sandbox: 加载到 Agent 上下文
+```
+
+**Skills 版本锁定**：
+
+```toml
+# kortix.toml — Skills 不再本地维护，改为引用中央平台
+[skills]
+source = "https://skills.internal.continental.com"
+subscriptions = [
+  { slug = "sap-query", version = "1.3.2" },
+  { slug = "compliance-check", version = "2.0.0" },
+  { slug = "plm-report", version = "1.1.0" },
+]
+# 不写 version → 自动用最新审批版本
+```
+
+### 17.4 内部 MCP Server 集成
+
+```mermaid
+flowchart LR
+    subgraph MCP_SERVERS["Continental MCP Servers"]
+        MCP_SAP["mcp-sap<br/>SAP RFC/BAPI 调用"]
+        MCP_PLM["mcp-plm<br/>Teamcenter 产品数据"]
+        MCP_JIRA["mcp-jira<br/>内部 Jira 工单"]
+        MCP_GITLAB["mcp-gitlab<br/>代码仓库操作"]
+        MCP_DOCS["mcp-docs<br/>SharePoint/Confluence"]
+    end
+
+    subgraph KORTIX["Kortix Agent"]
+        AGENT["Agent 沙箱内"]
+        MCP_CLIENT["MCP Client<br/>自动发现 + 连接"]
+    end
+
+    MCP_CLIENT --> MCP_SAP
+    MCP_CLIENT --> MCP_PLM
+    MCP_CLIENT --> MCP_JIRA
+    MCP_CLIENT --> MCP_GITLAB
+    MCP_CLIENT --> MCP_DOCS
+```
+
+```toml
+# kortix.toml — MCP 工具配置
+[[mcp_servers]]
+name = "sap"
+url = "https://mcp-sap.internal.continental.com"
+# MCP Server 自己处理认证和权限
+# Agent 调用时自动注入沙箱 Token
+
+[[mcp_servers]]
+name = "plm"
+url = "https://mcp-plm.internal.continental.com"
+
+[[mcp_servers]]
+name = "jira"
+url = "https://mcp-jira.internal.continental.com"
+```
+
+**关键变化**：Kortix 原生的 Connectors（Pipedream、OAuth 等）基本不再需要。所有外部系统通过 MCP Server 统一暴露。
+
+### 17.5 AWS 部署架构（更新版）
 
 ```mermaid
 flowchart TB
     subgraph VPC["Continental VPC - eu-central-1"]
-        ALB["ALB 负载均衡 - SSL + OIDC"]
-        ECS["ECS Fargate API × 3 - 跨 AZ"]
-        RDS["RDS PostgreSQL Multi-AZ - 加密"]
-        REDIS["ElastiCache Redis - 会话缓存"]
-        S3["S3 - 加密文件存储"]
-        SB["ECS EC2 沙箱 - 每会话独立 Task"]
-        ECR["ECR 企业镜像仓库"]
+        ALB["ALB - SSL + OIDC"]
+        ECS["ECS Fargate API × 3"]
+        RDS["RDS PostgreSQL - Kortix 元数据"]
+        REDIS["ElastiCache Redis"]
+        S3["S3 - 文件存储"]
+        SB["ECS EC2 沙箱 Task"]
+        ECR["ECR - 企业基础镜像"]
     end
-    subgraph ENT["Continental 企业服务"]
-        SSO["Azure AD SSO"]
-        MODEL["内部 LLM 网关"]
-        SIEM["Splunk SIEM"]
-        GITLAB["内部 GitLab"]
+
+    subgraph EXISTING["已有基础设施"]
+        LITELLM["LiteLLM 网关"]
+        SKILLS["中央 Skills 平台"]
+        MCP["MCP Servers - SAP/PLM/Jira/GitLab"]
+        SSO["Azure AD"]
+        SIEM["Splunk"]
     end
-    ALB --> ECS --> RDS & REDIS & SB
-    SSO --> ALB
-    ECS --> MODEL & SIEM & GITLAB
+
+    ALB --> ECS
+    ECS --> RDS & REDIS & SB
+    ECS --> SSO
+    SB --> LITELLM
+    SB --> SKILLS
+    SB --> MCP
+    ECS --> SIEM
 ```
 
-### 17.2 Terraform 核心模块
+### 17.6 成本估算（更新）
 
-```hcl
-resource "aws_db_instance" "kortix" {
-  identifier     = "kortix-prod"
-  engine         = "postgres" ; engine_version = "16.4"
-  instance_class = "db.r6g.xlarge"
-  allocated_storage = 500 ; max_allocated_storage = 1000
-  storage_encrypted = true ; backup_retention_period = 30
-  multi_az = true ; deletion_protection = true
-}
-resource "aws_ecs_service" "api" {
-  launch_type = "FARGATE" ; desired_count = 3
-  deployment_controller { type = "CODE_DEPLOY" }
-}
-```
+| 资源 | 月费 (€) | 变化 |
+|------|----------|------|
+| RDS PostgreSQL Multi-AZ | ~450 | — |
+| ElastiCache Redis | ~60 | — |
+| ECS Fargate API × 3 | ~280 | — |
+| ECS EC2 Sandbox × 10 | ~600 | — |
+| ALB + S3 + KMS + 监控 | ~125 | — |
+| LiteLLM / Skills / MCP | ~0 | **已有** |
+| **合计** | **~1,515** | LLM 网关和 Skills 省了 |
 
-### 17.3 GDPR 与安全合规
+**备注**：因为 LiteLLM、Skills 平台、MCP Server 都是 Continental 已有基础设施，Kortix 只需要部署 Agent 编排层和数据层，成本更低、集成更快。
 
-| 要求 | 实现 |
-|------|------|
-| **数据驻留** | 全部 `eu-central-1`，不跨 Region |
-| **静态加密** | RDS + S3 SSE-KMS + ECR 全部加密 |
-| **传输加密** | ALB TLS 1.3 + VPC 内 mTLS |
-| **访问控制** | Azure AD OIDC SSO + IAM Roles |
-| **审计** | CloudTrail → Splunk SIEM |
-| **密钥** | AWS KMS 统一管理 |
-| **源码审计** | Source-Available，合规团队可审查 |
-
-### 17.4 多团队隔离
-
-```yaml
-accounts:
-  - team-braking      # 制动系统
-  - team-infotainment # 车载信息娱乐
-  - team-supply-chain # 供应链
-  - team-hr           # 人力资源
-```
-
-每个团队独立 Kortix project，独立 GitLab repo，沙箱间完全隔离。
-
-### 17.5 关键优化落地
-
-**1. 沙箱冷启动 → 企业预构建镜像**
-
-```dockerfile
-# Continental 基础镜像
-FROM ubuntu:24.04
-COPY continental-ca.crt /usr/local/share/ca-certificates/
-RUN update-ca-certificates && apt-get install -y \
-    python3.12 nodejs git curl sap-nwrfc-sdk
-RUN curl -fsSL https://kortix.com/install-sandbox-agent | bash
-```
-效果：5min → **90s** 冷启动，预热快照 → **8s**。
-
-**2. 接企业 LLM 网关**
-
-```typescript
-const continentalProvider = {
-  baseURL: 'https://llm-gateway.internal.continental.com/v1',
-  auth: () => ({ headers: { 'Authorization': `Bearer ${getAwsIamToken()}` } }),
-  audit: (req, res) => auditLog.llm({ team, model: req.model, tokens: res.usage }),
-};
-```
-
-**3. Agent 质量评估**
-
-```sql
-CREATE VIEW agent_performance AS
-SELECT agent_slug,
-  COUNT(*) as sessions,
-  ROUND(AVG(CASE WHEN cr.status='merged' THEN 1 ELSE 0 END),2) as merge_rate
-FROM sessions s LEFT JOIN change_requests cr ON cr.session_id = s.id
-GROUP BY agent_slug;
-```
-
-**4. 统一密钥管理 → AWS KMS**
-
-### 17.6 分阶段实施
+### 17.7 分阶段实施（更新）
 
 ```mermaid
 flowchart LR
-    P0["Week 1-2 PoC"] --> P1["Week 3-5 单团队试点"]
-    P1 --> P2["Week 6-8 多团队推广"]
-    P2 --> P3["Week 9-12 全公司上线"]
+    P0["Week 1-2<br/>基础部署"] --> P1["Week 3-4<br/>LiteLLM+MCP 集成"]
+    P1 --> P2["Week 5-7<br/>Skills 平台对接"]
+    P2 --> P3["Week 8-10<br/>单团队试点"]
+    P3 --> P4["Week 11-14<br/>多团队推广"]
+
+    P0["Terraform 部署 Kortix<br/>RDS + ECS + 沙箱就绪<br/>Azure AD SSO 对接"]
+    P1["LLM 调用走 LiteLLM<br/>MCP Server 工具可用<br/>SAP 查询 / Jira 创建"]
+    P2["Skills 从中央平台订阅<br/>版本锁定 + 审批流程<br/>沙箱启动自动拉取"]
+    P3["制动系统团队试运行<br/>3 个 Agent 真实任务<br/>SAP 报告 / PLM 查询"]
+    P4["扩展到 4 个团队<br/>模板化配置<br/>内部培训"]
 ```
 
-### 17.7 月成本估算
+### 17.8 Kortix 定制点总结
 
-| 资源 | 月费 (€) |
-|------|----------|
-| RDS PostgreSQL Multi-AZ | ~450 |
-| ElastiCache Redis | ~60 |
-| ECS Fargate API × 3 | ~280 |
-| ECS EC2 Sandbox × 10 | ~600 |
-| ALB + S3 + KMS + 监控 | ~125 |
-| LLM 调用 | ~0（企业已有） |
-| **合计** | **~1,515** |
+| 组件 | Kortix 原始 | Continental 定制 |
+|------|-----------|-----------------|
+| LLM 网关 | 自建 Gateway + 计费 | **指向 LiteLLM，透传模式** |
+| Skills | `.kortix/opencode/skills/` 本地文件 | **从中央 Skills 平台订阅 + 版本锁定** |
+| Connectors | Pipedream / OAuth / OpenAPI | **全部走内部 MCP Server** |
+| Secrets | dotenvx + AWS SM | **统一 AWS KMS** |
+| 认证 | Supabase Auth | **Azure AD OIDC** |
+| 审计 | Sentry + OTEL | **Splunk SIEM** |
+| Git 仓库 | GitHub | **内部 GitLab** |
 
 ---
 
