@@ -73,7 +73,7 @@
 **技术本质**：Git 仓库（版本化记忆）+ Docker 沙箱（安全隔离）+ AI Agent（执行任务）+ Change Request（人审核）。
 
 ---
-## 0. 二次开发改造清单
+## 0. 二次开发改造清单 `🔧 开发 · 🏗 架构`
 
 在 Fork Suna 源码后，以下模块需要定制：
 
@@ -589,7 +589,7 @@ flowchart TB
 
 ---
 
-## 11. 技术栈速查
+## 11. 技术栈速查 `🔧 开发`
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
@@ -612,7 +612,7 @@ flowchart TB
 
 ---
 
-## 12. 源码级技术亮点
+## 12. 源码级技术亮点 `🔧 开发 · 🏗 架构`
 
 > 基于 `suna-main` 源码真实分析。
 
@@ -777,7 +777,7 @@ app.route('/v1/p', sandboxProxyApp);
 
 ---
 
-## 13. 架构真相比对
+## 13. 架构真相比对 `🔧 开发`
 
 | 我的初始猜测 | 源码真相 |
 |-------------|---------|
@@ -868,7 +868,7 @@ flowchart TB
 
 ---
 
-## 15. 技术架构深度解析
+## 15. 技术架构深度解析 `🏗 架构 · 🔧 运维`
 
 ### 14.1 完整部署拓扑
 
@@ -1145,7 +1145,7 @@ deploy-prod:
 
 ---
 
-## 16. 架构总结
+## 16. 架构总结 `👥 全员`
 
 ```
 Kortix 的本质 = Git (版本化) + Docker (沙箱隔离) + Agent (AI 劳动力) + CR (人类审核)
@@ -1165,7 +1165,7 @@ Kortix 的本质 = Git (版本化) + Docker (沙箱隔离) + Agent (AI 劳动力
 
 ---
 
-## 17. AutoCorp 企业级 AWS 部署方案
+## 17. AutoCorp 企业级 AWS 部署方案 `🔧 运维 · 🏗 架构`
 
 > **场景**：AutoCorp 内部 AWS（法兰克福 eu-central-1），自托管，多团队。公司已有 **LiteLLM 网关**、**中央 Skills 管理平台**、**内部 MCP Server**——Kortix 作为 Agent 编排层集成这些现有基础设施。
 
@@ -1385,6 +1385,58 @@ flowchart LR
 | 认证 | Supabase Auth | **Azure AD OIDC** |
 | 审计 | Sentry + OTEL | **Splunk SIEM** |
 | Git 仓库 | 任意 Git 托管（Suna 团队用 GitHub Dogfooding） | **内部 GitLab** |
+
+### 17.9 运维手册 `🔧 运维`
+
+**日常监控**：
+
+```bash
+# 1. API 健康检查
+curl https://agent.internal.autocorp.com/v1/health
+# 关键指标: uptime_seconds, memory_mb, trigger_scheduler, warm_pool
+
+# 2. EKS Pod 状态
+kubectl get pods -n autocorp-agent
+kubectl logs -f deployment/api -n autocorp-agent --tail=50
+
+# 3. RDS 数据库
+# CloudWatch → RDS → 关注 CPU、连接数、存储
+# 告警阈值: CPU > 80% / 连接数 > 100 / 存储 > 80%
+```
+
+**回滚流程**：
+
+```bash
+# 新版本出问题时:
+# 1. 找到上一个正常的镜像版本
+aws ecr describe-images --repository-name autocorp-agent-api --query 'sort_by(imageDetails,&imagePushedAt)[-2].imageTags[0]'
+
+# 2. 回滚到上一个版本
+kubectl set image deployment/api api=123456789.dkr.ecr.eu-central-1.amazonaws.com/autocorp-agent-api:v1.0 -n autocorp-agent
+kubectl rollout status deployment/api -n autocorp-agent
+
+# 3. 验证
+curl https://agent.internal.autocorp.com/v1/health
+```
+
+**备份恢复**：
+
+| 资源 | 备份方式 | RPO | RTO |
+|------|----------|-----|-----|
+| RDS | 自动日备份 + PITR（时间点恢复） | 5 分钟 | < 30 分钟 |
+| S3 文件 | 版本控制 + 跨区域复制 | 实时 | < 5 分钟 |
+| ECR 镜像 | 每个版本永久保留 | — | 即时 |
+| K8s 配置 | Git（k8s manifests 都在 infra/k8s/） | 实时 | < 5 分钟 |
+
+**常见故障处理**：
+
+| 故障 | 现象 | 处理 |
+|------|------|------|
+| API Pod CrashLoop | `kubectl get pods` 显示 Restarts 持续增长 | `kubectl logs` 看错误 → 修代码 → 重新构建部署 |
+| 沙箱创建超时 | 用户等很久 Agent 没开始 | 检查 EKS Worker Node 资源 → 扩容节点 |
+| RDS 连接池满 | API 日志大量 DB 超时 | 增加 `max_connections` 或重启泄漏连接的应用 |
+| LiteLLM 不可达 | Agent 调用 LLM 失败 | 检查 LiteLLM 健康状态 → 切换到备用模型 |
+| 磁盘满 | S3 或 ECR 存储告警 | S3 生命周期策略自动清理 → ECR 清理旧镜像 |
 
 ---
 
