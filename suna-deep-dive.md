@@ -15,6 +15,12 @@
 - [7. 安全模型](#7-安全模型)
 - [8. 关键设计决策分析](#8-关键设计决策分析)
 - [9. 与传统 Agent 框架对比](#9-与传统-agent-框架对比)
+- [10. 技术栈速查](#10-技术栈速查)
+- [11. 源码级技术亮点](#11-源码级技术亮点)
+- [12. 架构真相比对](#12-架构真相比对)
+- [13. 业务架构深度解析](#13-业务架构深度解析)
+- [14. 技术架构深度解析](#14-技术架构深度解析)
+- [15. 架构总结](#15-架构总结)
 
 ---
 
@@ -140,15 +146,15 @@ sequenceDiagram
     participant Docker as Docker 沙箱
     participant Agent as OpenCode Agent
 
-    User->>API: 创建会话 (prompt + agent)
-    API->>Git: 创建分支 (session-xxx)
+    User->>API: 创建会话 - prompt + agent
+    API->>Git: 创建分支 session-xxx
     API->>Docker: 启动沙箱容器<br/>挂载 Git 分支
     Docker->>Agent: 注入 Agent 配置 + Skills + Secrets
     Agent->>Agent: 执行任务<br/>读写文件 / 运行命令 / 浏览网页
     
     Agent->>Git: git add + commit + push
-    Agent->>API: 创建 Change Request (CR)
-    API->>User: 通知: "Agent 完成了, 请审核 CR"
+    Agent->>API: 创建 Change Request
+    API->>User: Agent 完成了, 请审核 CR
     
     alt 审核通过
         User->>Git: Merge CR → main
@@ -359,42 +365,24 @@ flowchart TB
 
 ## 10. 技术栈速查
 
-```yaml
-语言:
-  - TypeScript (前端 + API)
-  - Python (部分工具链/数据处理)
-
-前端:
-  - Next.js 14+ (App Router)
-  - Tailwind CSS
-  - React 18
-
-后端:
-  - Bun (运行时)
-  - Hono (Web 框架)
-  - LiteLLM (LLM 统一接口)
-
-数据库:
-  - Supabase (PostgreSQL + Auth + Storage + Realtime)
-  - Prisma (ORM, 推测)
-
-基础设施:
-  - Docker (沙箱运行时)
-  - s6 (沙箱内进程管理器)
-| **Docker** | Docker 沙箱运行时 |
-| **s6** | 沙箱内进程管理器 |
-| **Daytona SDK** | 沙箱编排（启动/停止/快照/代理） |
-| **Docker Hub** | 镜像仓库（多架构 amd64+arm64） |
-| **Vercel** | 前端部署 |
-| **JustAVPS** | 沙箱 VPS 托管 |
-| **AWS Secrets Manager** | 生产密钥 |
-
-| **Agent** | OpenCode（Agent 引擎） |
-| **Playwright** | 浏览器自动化 |
-| **MCP / OpenAPI / GraphQL** | 工具连接协议 |
-| **kortix-sandbox-agent-server** | 沙箱内常驻守护进程（Go 二进制） |
-
-| **DevOps** | GitHub Actions (CI/CD) · pnpm monorepo · dotenvx 密钥加密 · Gitleaks 密钥扫描 · pnpm minimumReleaseAge 72h 供应链防护 |
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| **语言** | TypeScript（主体） + Python（工具链） + Go（沙箱守护进程） | |
+| **前端** | Next.js 14+ (App Router) · Tailwind CSS · React 18 | |
+| **后端运行时** | **Bun**（非 Node.js） | 原生 TS，启动快 4x |
+| **后端框架** | **Hono + OpenAPIHono** + `@hono/zod-openapi` | Zod Schema = API 合约 |
+| **ORM** | **Drizzle ORM**（非 Prisma） | 类型安全 SQL 构建器 |
+| **数据库** | Supabase：PostgreSQL + Auth + Storage + Realtime | |
+| **缓存** | Redis：会话缓存 + 限流 | |
+| **LLM 网关** | 自建 LLM Gateway：OpenRouter + LiteLLM 统一 100+ 模型 | 含计费 + 加价 |
+| **沙箱编排** | Daytona SDK / JustAVPS | 启动/停止/快照/代理 |
+| **沙箱运行时** | Docker 容器 · Alpine Linux · s6 init | 每次会话独立 |
+| **Agent 引擎** | OpenCode | 文件操作 + 执行 + PR |
+| **连接器** | MCP + OpenAPI + GraphQL + Pipedream（3000+ 应用） | |
+| **密钥管理** | dotenvx 加密入 Git（本地）+ AWS Secrets Manager（生产） | |
+| **CI/CD** | GitHub Actions · Argo CD GitOps · Docker Hub 多架构镜像 | |
+| **可观测性** | Sentry + OpenTelemetry + Prometheus | |
+| **供应链** | pnpm monorepo · 72h release age · postinstall 白名单 | |
 
 ---
 
@@ -724,13 +712,13 @@ sequenceDiagram
     participant Agent as OpenCode Agent
     participant Sync as 同步引擎
 
-    User->>API: 创建会话(project_id, prompt)
+    User->>API: 创建会话 project_id, prompt
     API->>Template: 检查是否有预构建快照
     
     alt 有预热快照
-        API->>Snapshot: clone 预热快照(约1.3s)
-    else 无快照(冷启动)
-        API->>Daytona: 从基础镜像创建沙箱(约5min)
+        API->>Snapshot: clone 预热快照-约1.3s
+    else 无快照-冷启动
+        API->>Daytona: 从基础镜像创建沙箱-约5min
     end
     
     Daytona->>SB: 启动容器
@@ -738,19 +726,19 @@ sequenceDiagram
     SB->>SB: kortix-sandbox-agent-server 守护进程启动
     
     SB->>Git: clone 项目仓库
-    SB->>Git: 创建分支 session-{id}
+    SB->>Git: 创建分支 session-id
     
     SB->>Agent: 加载 OpenCode 配置
     Note over Agent: Agent 提示词 + Skills + 工具
     
-    SB->>API: 注入 Secrets(加密, 环境变量)
+    SB->>API: 注入 Secrets-加密, 环境变量
     
     Agent->>Agent: 执行 Prompt 中的任务
     Agent->>Git: 批量 commit + push
     
-    Agent->>API: 创建 Change Request(CR)
+    Agent->>API: 创建 Change Request
     API->>Sync: 同步会话状态到 Supabase
-    API->>User: 通知: CR 待审核
+    API->>User: 通知 - CR 待审核
     
     User->>API: 审核 CR
     alt 通过
