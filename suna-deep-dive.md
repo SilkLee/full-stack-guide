@@ -578,4 +578,308 @@ app.route('/v1/p', sandboxProxyApp);
 
 ---
 
-*本文基于 Suna v0.9.5 源码分析编写。*
+## 13. 业务架构深度解析
+
+### 13.1 商业模型 — 三级火箭
+
+```mermaid
+flowchart TB
+    L1["第一级: 开源平台<br/>★ 自托管, 完全免费<br/>数据自有, 模型自有"]
+    L2["第二级: Cloud SaaS<br/>★ 按席位 + 计算量收费<br/>managed hosting"]
+    L3["第三级: Enterprise<br/>★ 单租户私有部署<br/>VPC/on-prem/air-gapped"]
+    
+    L4["Platinum.dev<br/>★ 计算基础设施层<br/>CPU/GPU 沙箱 + 推理 + 训练<br/>面向所有 AI 公司"]
+    
+    L1 --> L2 --> L3
+    L1 -.-> L4
+    L2 -.-> L4
+```
+
+**商业模式拆解**：
+
+| 层级 | 目标客户 | 收费方式 | 年 ARPU 区间 |
+|------|----------|----------|------------|
+| 自托管 | 独立开发者、小团队 | 免费 | $0 |
+| Cloud | 10-500 人公司 | 按席位数 + 计算分钟 | $5K-$200K |
+| Enterprise | 500+ 人、合规要求 | 年合同 + 部署费 | $200K-$2M+ |
+| Marketplace | 生态开发者 | 佣金 15-30% | 网络效应 |
+
+### 13.2 三条业务线
+
+| 业务线 | 目标客户 | 核心价值 |
+|--------|----------|----------|
+| **Developers** | 个人/小团队开发者 | 给 OpenCode/Claude/Cursor 一个管理后台——PR 预览、后台编码 Agent |
+| **Companies** | 企业 | AI 劳动力池——客服、销售、运营、研发各自有 Agent，统一管理 |
+| **Agencies** | 咨询公司/集成商 | 白标 + 垂直化——给客户交付 AI 解决方案，底层用 Kortix |
+
+### 13.3 竞品格局
+
+```mermaid
+flowchart TB
+    KORTIX["Kortix<br/>公司级 Agent 指挥中心<br/>Git 原生 + Docker 沙箱 + CR 审核"]
+    
+    subgraph TOOLS["开发者工具类"]
+        LANG["LangChain/LlamaIndex<br/>LLM 框架"]
+        CREW["CrewAI<br/>多 Agent 协作"]
+        OPENAI["OpenAI Agents SDK<br/>单 Agent"]
+    end
+    
+    subgraph PLATFORMS["平台类"]
+        DUST["Dust.tt<br/>企业 AI 助手平台"]
+        RELEVANCE["Relevance AI<br/>AI 劳动力"]
+        AGENTFORCE["Salesforce Agentforce<br/>CRM AI"]
+    end
+    
+    subgraph IDES["IDE 类"]
+        CURSOR["Cursor<br/>AI 编程"]
+        WINDSURF["Windsurf<br/>AI IDE"]
+    end
+    
+    KORTIX -.->|"差异化: Git 仓库 = 公司<br/>Change Request = 审核<br/>Docker 沙箱 = 隔离"| TOOLS
+    KORTIX -.->|"差异化: 开源自托管<br/>数据自有"| PLATFORMS
+```
+
+### 13.4 护城河分析
+
+| 护城河 | 深度 | 说明 |
+|--------|------|------|
+| **Git 原生工作流** | ⭐⭐⭐ | 公司状态版本化，天然审计/回滚/协作 |
+| **Docker 沙箱隔离** | ⭐⭐⭐ | 真正 OS 级隔离，Agent 可以 rm -rf / |
+| **开源 + 自托管** | ⭐⭐ | 消除供应商锁定恐惧 |
+| **多模型支持** | ⭐⭐ | 不绑定任何模型供应商 |
+| **Change Request 审核** | ⭐⭐⭐ | 人类最后把关，企业合规必需 |
+| **网络效应** | ⭐ | Marketplace + Skills 生态（早期） |
+
+---
+
+## 14. 技术架构深度解析
+
+### 14.1 完整部署拓扑
+
+```mermaid
+flowchart TB
+    subgraph EDGE["用户接入层"]
+        VERCEL["Vercel<br/>前端 (Next.js)"]
+        CLI["CLI (kortix)"]
+        SLACK["Slack/Discord 渠道"]
+    end
+
+    subgraph API_LAYER["API 层 (Bun + Hono)"]
+        LB["ALB 负载均衡"]
+        API1["API Pod 1<br/>EKS Fargate"]
+        API2["API Pod 2"]
+        API3["API Pod N"]
+        LEADER["★ Leader Pod<br/>定时任务 + 预热池 + 迁移"]
+    end
+
+    subgraph DATA["数据层"]
+        SUPABASE["Supabase<br/>PostgreSQL + Auth + Storage"]
+        REDIS["Redis<br/>会话缓存 + 限流"]
+    end
+
+    subgraph SANDBOX["沙箱层"]
+        DAYTONA["Daytona / JustAVPS<br/>沙箱编排平台"]
+        SB1["沙箱 1<br/>Alpine + OpenCode"]
+        SB2["沙箱 2"]
+        SBN["沙箱 N<br/>最大数千并行"]
+    end
+
+    subgraph CI["CI/CD"]
+        GHA["GitHub Actions<br/>PR 检查 + 构建"]
+        ARGO["Argo CD<br/>GitOps 部署到 EKS"]
+    end
+
+    subgraph OBS["可观测性"]
+        SENTRY["Sentry<br/>错误追踪"]
+        OTEL["OpenTelemetry<br/>请求追踪"]
+        METRICS["Prometheus<br/>指标采集"]
+    end
+
+    VERCEL --> LB
+    CLI --> LB
+    SLACK --> LB
+    LB --> API1 & API2 & API3
+    API_LAYER --> SUPABASE
+    API_LAYER --> REDIS
+    API_LAYER --> DAYTONA
+    DAYTONA --> SB1 & SB2 & SBN
+    GHA --> ARGO
+    ARGO --> API_LAYER
+    API_LAYER --> SENTRY
+    API_LAYER --> OTEL
+    API_LAYER --> METRICS
+```
+
+### 14.2 沙箱生命周期详解
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant API as API
+    participant Git as Git 仓库
+    participant Daytona as Daytona/编排器
+    participant Template as 基础镜像模板
+    participant Snapshot as 快照
+    participant SB as 沙箱容器
+    participant Agent as OpenCode Agent
+    participant Sync as 同步引擎
+
+    User->>API: 创建会话(project_id, prompt)
+    API->>Template: 检查是否有预构建快照
+    
+    alt 有预热快照
+        API->>Snapshot: clone 预热快照(约1.3s)
+    else 无快照(冷启动)
+        API->>Daytona: 从基础镜像创建沙箱(约5min)
+    end
+    
+    Daytona->>SB: 启动容器
+    SB->>SB: s6 进程管理器启动
+    SB->>SB: kortix-sandbox-agent-server 守护进程启动
+    
+    SB->>Git: clone 项目仓库
+    SB->>Git: 创建分支 session-{id}
+    
+    SB->>Agent: 加载 OpenCode 配置
+    Note over Agent: Agent 提示词 + Skills + 工具
+    
+    SB->>API: 注入 Secrets(加密, 环境变量)
+    
+    Agent->>Agent: 执行 Prompt 中的任务
+    Agent->>Git: 批量 commit + push
+    
+    Agent->>API: 创建 Change Request(CR)
+    API->>Sync: 同步会话状态到 Supabase
+    API->>User: 通知: CR 待审核
+    
+    User->>API: 审核 CR
+    alt 通过
+        API->>Git: Merge CR → main
+        API->>Daytona: 销毁沙箱
+    else 拒绝
+        User->>API: 追加指令
+        API->>Agent: 继续修改
+    end
+```
+
+### 14.3 数据模型（核心）
+
+```
+数据库: Supabase PostgreSQL
+
+核心表:
+┌──────────────────────────┐
+│ accounts                 │  租户/组织
+│  - id: uuid (PK)        │
+│  - name: text            │
+│  - owner_id: uuid (FK)  │
+└──────────────────────────┘
+           │
+           │ 1:N
+           ▼
+┌──────────────────────────┐
+│ projects                 │  项目 (= Git 仓库)
+│  - id: uuid (PK)        │
+│  - account_id: uuid (FK)│
+│  - repo_url: text        │  Git 仓库地址
+│  - config: jsonb         │  kortix.toml 解析结果
+│  - provider: enum        │  daytona / platinum
+└──────────────────────────┘
+           │
+           │ 1:N
+           ▼
+┌──────────────────────────┐
+│ sessions                 │  会话 (= 沙箱实例)
+│  - id: uuid (PK)        │
+│  - project_id: uuid (FK)│
+│  - sandbox_id: text      │  Daytona external_id
+│  - branch_name: text     │  Git 分支名
+│  - agent_slug: text      │  使用的 Agent 名
+│  - status: enum          │  starting/running/completed/failed
+│  - started_at: timestamp │
+│  - completed_at: timestamp│
+│  - prompt: text          │
+└──────────────────────────┘
+           │
+           │ 1:N
+           ▼
+┌──────────────────────────┐
+│ change_requests          │  CR (Agent 的 PR)
+│  - id: uuid (PK)        │
+│  - session_id: uuid (FK)│
+│  - branch_name: text     │
+│  - title: text           │
+│  - status: enum          │  open/merged/closed
+│  - diff_summary: text    │
+└──────────────────────────┘
+           │
+           │ 1:N
+           ▼
+┌──────────────────────────┐
+│ messages                 │  会话消息(同步自沙箱)
+│  - id: uuid (PK)        │
+│  - session_id: uuid (FK)│
+│  - role: enum            │  user / agent / system
+│  - content: text         │
+│  - tool_calls: jsonb     │
+└──────────────────────────┘
+```
+
+### 14.4 Agent 体系
+
+| Agent | 角色 | 工具权限 | 触发方式 |
+|-------|------|----------|----------|
+| **kortix** | 通用知识工作者 | 全部工具 | 手动/聊天/API |
+| **pr-bot** | PR 审查 + 预览环境 | GitHub + 文件系统 + 浏览器 | GitHub Webhook |
+| **memory-reflector** | 记忆整理 | memory 工具 | 定时任务 |
+
+### 14.5 Skills 体系
+
+Skills 是**可复用的领域知识模块**，Markdown + 可执行脚本：
+
+| Skill | 功能 |
+|-------|------|
+| `kortix-system` | Kortix 平台本身的知识 |
+| `kortix-executor` | 连接器执行（3000+ 应用） |
+| `kortix-computer` | 浏览器自动化 + 文件操作 |
+| `kortix-slack` | Slack 集成 |
+| `kortix-memory` | 记忆管理协议 |
+| `thermo-nuclear-review` | 激进代码审查 |
+| `agent-browser` | Playwright Web 自动化 |
+
+### 14.6 GitOps 部署流水线
+
+```mermaid
+flowchart LR
+    PR["Pull Request"] --> CI["CI: CodeQL + Secret Scan + Build"]
+    CI --> MERGE["Merge → main"]
+    MERGE --> DEV_DEPLOY["Auto Deploy → dev.kortix.com<br/>Worker → EKS + Vercel"]
+    
+    DEV_DEPLOY --> PROMOTE["★ Promote to Production<br/>打开 release PR → prod 分支"]
+    PROMOTE --> RETAG["★ Retag, 不 Rebuild<br/>prod 使用 dev 上验证过的<br/>精确镜像字节"]
+    RETAG --> PROD_DEPLOY["Argo CD 同步 → EKS<br/>Vercel Deploy → kortix.com"]
+    
+    PROD_DEPLOY --> RELEASE["GitHub Release vX.Y.Z<br/>4 个制品: API + Frontend + CLI + Desktop"]
+```
+
+**关键原则：Retag, Don't Rebuild**——生产部署使用在 dev 上验证过的**同一个镜像字节**，只是换个 tag。保证 dev 测试通过的东西到 prod 不会出现构建差异。
+
+---
+
+## 15. 架构总结
+
+```
+Kortix 的本质 = Git (版本化) + Docker (沙箱隔离) + Agent (AI 劳动力) + CR (人类审核)
+
+与传统 Agent 框架的根本差异:
+  LangChain  → 开发者工具，代码嵌入
+  CrewAI     → 多 Agent 编排，Python 进程内
+  Kortix     → 公司操作系统，Git 仓库 + Docker 沙箱 + 人类审核闸门
+
+核心竞争力:
+  1. Git 原生工作流 — 审计/回滚/协作天然具备
+  2. Docker 沙箱隔离 — 真正 OS 级安全
+  3. Change Request — 人类把关，企业合规
+  4. 开源自托管 — 零供应商锁定
+  5. 多模型 — 不绑定任何 LLM 厂商
+```
