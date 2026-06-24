@@ -241,8 +241,100 @@ flowchart TB
 | 可移植 | 难以导出 | `git clone` 即全部 |
 
 ---
+---
 
-## 6. 前端与 CLI
+## 6. 用户交互与产品功能全景
+
+> 架构是骨架，这一节是血肉——Kortix 的用户实际能看到什么、点击什么、产出什么。
+
+### 6.1 三种人用三种方式
+
+```mermaid
+flowchart LR
+    subgraph DEV["开发者 — CLI + IDE"]
+        D1["kortix init → ship<br/>一行命令部署"]
+        D2["vim agent.md<br/>直接改 Agent"]
+        D3["PR 自动预览<br/>Agent 自动 Review"]
+    end
+    subgraph OPS["运营/业务 — Web Dashboard"]
+        O1["Chat — 像 ChatGPT<br/>但对公司状态全知"]
+        O2["Agent Builder — 可视化<br/>配工具/权限"]
+        O3["监控 — 所有 Agent 状态<br/>CR 审核通过/拒绝"]
+    end
+    subgraph SLACK["非技术 — Slack"]
+        S1["@Kortix 整理本周提交"]
+        S2["@Kortix 生成客户报告"]
+        S3["Agent 完成后 DM 通知"]
+    end
+```
+
+### 6.2 8 类真实任务
+
+| 类别 | 真实任务 | Agent 产出 |
+|------|----------|-----------|
+| **代码工程** | "审查这个 PR，找安全问题，开修复 PR" | Code Review + 修复分支 |
+| **内容创作** | "根据本周 commit 生成产品更新日志" | Markdown |
+| **数据分析** | "分析上周客户反馈 Top 5 痛点，做成 PPT" | .pptx 文件 |
+| **运维部署** | "检查所有环境健康状态和慢查询" | 运维报告 |
+| **客户沟通** | "给客户发邮件，跟进上次会议行动项" | 邮件草稿 |
+| **项目管理** | "扫描项目看板，找阻塞超 3 天的任务" | 项目健康报告 |
+| **销售支持** | "根据客户信息生成定制化产品演示 Deck" | 销售 Deck |
+| **自动触发** | "每天早上 9 点扫描行业新闻，整理简报" | 日报 |
+
+### 6.3 完整用户旅程
+
+```mermaid
+sequenceDiagram
+    participant CEO as 老板
+    participant DEV as 开发者
+    participant WEB as Web Dashboard
+    participant AGENT as AI Agent
+    participant SLACK as Slack
+
+    Note over CEO,SLACK: 初始化公司
+    DEV->>DEV: kortix init → kortix.toml + agents/
+    DEV->>DEV: 编辑 agents/kortix.md 定义公司 Agent
+    DEV->>WEB: kortix ship → 部署上线
+
+    Note over CEO,SLACK: 日常工作
+    CEO->>SLACK: @Kortix 分析上周数据，找出销售下降原因
+    SLACK->>AGENT: 创建会话，启动沙箱
+    AGENT->>AGENT: 连接 HubSpot 拉数据<br/>连接 Stripe 拉收入<br/>写分析脚本，生成图表
+    AGENT->>SLACK: 分析报告已就绪
+    Note over SLACK: 消息卡片含原因/证据/建议
+
+    Note over CEO,SLACK: 审核与改进
+    DEV->>WEB: Dashboard 查看 Agent 的 Change Request
+    DEV->>WEB: 审核代码变更 diff<br/>通过 → Merge → 仓库更新
+    DEV->>WEB: 在 agents/kortix.md 加一条规则<br/>"以后分析报告要包含同比数据"
+    Note over AGENT: 公司自我进化一步
+```
+
+### 6.4 Dashboard 核心界面
+
+| 界面 | 功能 |
+|------|------|
+| **Command Center** | 所有 Agent 状态、最近会话、待审核 CR |
+| **Chat** | 类似 ChatGPT，有文件面板和终端面板 |
+| **Agent Builder** | Markdown 编辑 + 可视化工具权限网格 |
+| **Skills** | 公司专属知识模块管理 |
+| **Connectors** | 3000+ 应用卡片 + MCP 导入 |
+| **Triggers** | Cron + Webhook 配置 |
+| **Secrets** | 密钥列表-加密存储 |
+| **CR 审核** | diff 对比 + 会话上下文 + 通过/拒绝 |
+| **Channels** | Slack/Discord 连接状态 |
+
+### 6.5 三种工作模式
+
+| 模式 | 触发 | 适用场景 |
+|------|------|----------|
+| **按需 On-Demand** | 人在 Chat/Slack 发指令 | 临时任务、探索 |
+| **人协助 Human-Assisted** | Agent 自动执行，关键节点等人批准 | 代码/内容产出 |
+| **自动化 Automated** | Cron 定时 / Webhook 触发 | 日常运营、监控 |
+
+
+
+## 7. 前端与 CLI
 
 ### 6.1 前端架构
 
@@ -283,7 +375,7 @@ kortix models pull llama3:8b     # 拉取本地模型 (Ollama)
 
 ---
 
-## 7. 安全模型
+## 8. 安全模型
 
 ```mermaid
 flowchart TB
@@ -312,7 +404,7 @@ flowchart TB
 
 ---
 
-## 8. 关键设计决策分析
+## 9. 关键设计决策分析
 
 ### 8.1 为什么每个会话一个 Docker 沙箱？
 
@@ -346,7 +438,7 @@ flowchart TB
 
 ---
 
-## 9. 与传统 Agent 框架对比
+## 10. 与传统 Agent 框架对比
 
 | 维度 | Kortix | LangChain | AutoGPT | CrewAI |
 |------|--------|-----------|---------|--------|
@@ -363,7 +455,7 @@ flowchart TB
 
 ---
 
-## 10. 技术栈速查
+## 11. 技术栈速查
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
@@ -386,7 +478,7 @@ flowchart TB
 
 ---
 
-## 11. 源码级技术亮点
+## 12. 源码级技术亮点
 
 > 基于 `suna-main` 源码真实分析。
 
@@ -551,7 +643,7 @@ app.route('/v1/p', sandboxProxyApp);
 
 ---
 
-## 12. 架构真相比对
+## 13. 架构真相比对
 
 | 我的初始猜测 | 源码真相 |
 |-------------|---------|
@@ -566,7 +658,7 @@ app.route('/v1/p', sandboxProxyApp);
 
 ---
 
-## 13. 业务架构深度解析
+## 14. 业务架构深度解析
 
 ### 13.1 商业模型 — 三级火箭
 
@@ -640,7 +732,7 @@ flowchart TB
 
 ---
 
-## 14. 技术架构深度解析
+## 15. 技术架构深度解析
 
 ### 14.1 完整部署拓扑
 
@@ -854,7 +946,7 @@ flowchart LR
 
 ---
 
-## 15. 架构总结
+## 16. 架构总结
 
 ```
 Kortix 的本质 = Git (版本化) + Docker (沙箱隔离) + Agent (AI 劳动力) + CR (人类审核)
