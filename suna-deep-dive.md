@@ -253,6 +253,47 @@ flowchart TB
     REVIEW -->|"关闭"| DISCARD["沙箱销毁<br/>更改丢弃"]
 ```
 
+### 5.1 Git 仓库里存什么
+
+以供应链团队的 `supply-chain` 项目为例：
+
+```
+supply-chain/                    ← 这个文件夹 = 一个 Git 仓库
+│
+├── kortix.toml                  ← 项目配置文件
+│                                  定义用什么镜像、连哪些 MCP、
+│                                  Skills 从哪订阅、Cron 定时任务
+│
+├── agents/                      ← Agent 定义（Markdown，人写）
+│   ├── sap-analyst.md           ← "你是 SAP 分析师，查表 A/B/C"
+│   └── compliance-checker.md    ← "你是合规审计员，检查标准 X/Y/Z"
+│
+├── skills/                      ← 技能知识库（人写，Agent 用）
+│   ├── sap-query.md             ← "SAP 查询必须带 werks 参数"
+│   └── generate-report.py       ← 生成报告的 Python 脚本
+│
+├── memory/                      ← 公司经验（Agent 自动写入）
+│   ├── MEMORY.md                ← 索引文件
+│   ├── conventions.md           ← "报表格式统一用欧元"
+│   ├── decisions.md             ← "Q3 决定换新供应商评分模型"
+│   └── gotchas.md               ← "werks=1000 数据不准，需手工校准"
+│
+├── reports/                     ← Agent 产出物（Agent 写入）
+│   ├── 2026-01-supplier-report.xlsx
+│   └── weekly-compliance-check.md
+│
+└── .kortix/                     ← 运行时配置
+    ├── Dockerfile                ← 沙箱镜像定义
+    └── opencode/                 ← Agent 引擎配置
+```
+
+| 谁写 | 目录 | 内容 |
+|------|------|------|
+| **人**（一次性配置） | `agents/` `skills/` `kortix.toml` `.kortix/` | 定义 Agent 会什么、用什么工具 |
+| **Agent**（日常工作） | `reports/` `memory/` | 产出的报告、积累的经验 |
+
+### 5.2 Git 工作流
+
 **Git 是协议，不是平台**——Suna 只依赖标准 Git（clone/push/branch/commit），不绑定任何托管平台。Suna 团队自己用 GitHub 托管 Suna 源码，这是他们"用 Suna 开发 Suna"的 Dogfooding。你部署时，项目仓库指向内部 GitLab 即可，零代码改动。
 
 **与传统 Agent 的本质区别**：
