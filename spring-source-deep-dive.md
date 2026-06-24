@@ -2931,6 +2931,152 @@ public interface UserMapper {  // 纯接口！
 2. **渐进式** — 可以只用 IoC，不加 AOP；可以用 Boot，不上 Cloud
 3. **社区治理** — Pivotal/VMware/Broadcom 连续收购但 Spring 始终保持 Apache 2.0 开源
 
+### 24.11 Spring 与 DDD（领域驱动设计）的关系
+
+Spring 不是 DDD 框架，但它的多个模块**天然对齐 DDD 的战术模式**。
+
+```mermaid
+flowchart TB
+    subgraph DDD["DDD 战术模式"]
+        ENTITY["Entity<br/>有唯一标识, 可变"]
+        VO["Value Object<br/>无标识, 不可变"]
+        AGG["Aggregate<br/>一致性边界"]
+        REPO["Repository<br/>聚合持久化"]
+        EVENT["Domain Event<br/>领域事件"]
+        SVC["Domain Service<br/>无状态领域逻辑"]
+        FACTORY["Factory<br/>复杂对象创建"]
+    end
+
+    subgraph SPRING["Spring 对应支持"]
+        JPA["@Entity + @Id<br/>JPA Entity = DDD Entity"]
+        EMB["@Embeddable<br/>JPA Embeddable = DDD Value Object"]
+        TX["@Transactional<br/>事务边界 = 聚合一致性边界"]
+        DATA["Spring Data Repository<br/>接口即 Repository"]
+        APP_EVENT["ApplicationEvent + @EventListener<br/>= Domain Event"]
+        COMPONENT["@Service/@Component<br/>= Domain Service"]
+        FACT_BEAN["FactoryBean / @Bean 工厂方法<br/>= Factory"]
+    end
+
+    ENTITY -.-> JPA
+    VO -.-> EMB
+    AGG -.-> TX
+    REPO -.-> DATA
+    EVENT -.-> APP_EVENT
+    SVC -.-> COMPONENT
+    FACTORY -.-> FACT_BEAN
+```
+
+#### 24.11.1 聚合根与 @Transactional
+
+DDD 要求**一个事务只修改一个聚合**。Spring 的 `@Transactional` 天然做这件事：
+
+```java
+// ★ DDD 聚合根: Order 是聚合根, OrderLine 是聚合内部实体
+@Entity
+public class Order {                          // ← 聚合根
+    @Id private Long id;
+    @OneToMany(cascade = ALL, orphanRemoval = true)
+    private List<OrderLine> lines;           // ← 聚合内部
+    
+    public void addLine(Product product, int qty) {
+        // ★ 聚合根控制所有内部修改
+        lines.add(new OrderLine(product, qty));
+        recalculateTotal();
+    }
+}
+
+@Service
+@Transactional  // ★ 事务边界 = 聚合一致性边界
+public class OrderService {
+    public void addItem(Long orderId, Product product, int qty) {
+        Order order = orderRepo.findById(orderId);
+        order.addLine(product, qty);    // 聚合内部一致性由聚合根保证
+        // orderRepo.save(order);       // JPA 自动脏检查, 不需要显式 save
+    }
+    // ★ 一个事务只修改 Order 一个聚合, 不跨聚合修改
+}
+```
+
+#### 24.11.2 Repository 模式
+
+```java
+// DDD 的 Repository: 只定义接口, 不关心实现
+// Spring Data 完美实现这一思想:
+
+// ★ 这就是 DDD Repository!
+public interface OrderRepository extends JpaRepository<Order, Long> {
+    // 方法名即查询意图, 不用写 SQL
+    List<Order> findByStatusAndCreatedAtAfter(OrderStatus status, LocalDateTime since);
+    
+    // @Query 用于复杂场景
+    @Query("SELECT o FROM Order o JOIN FETCH o.lines WHERE o.id = :id")
+    Optional<Order> findByIdWithLines(@Param("id") Long id);
+}
+```
+
+#### 24.11.3 领域事件 → ApplicationEvent
+
+```java
+// DDD: 聚合产生领域事件, 其他模块监听
+@Entity
+public class Order {
+    // ★ 聚合根内部收集事件
+    @Transient
+    private final List<Object> domainEvents = new ArrayList<>();
+    
+    public void confirm() {
+        this.status = OrderStatus.CONFIRMED;
+        // ★ 发布领域事件
+        domainEvents.add(new OrderConfirmedEvent(this.id, this.totalAmount));
+    }
+    
+    public List<Object> getDomainEvents() { return domainEvents; }
+}
+
+// 基础设施层: 监听 Spring 事件
+@Component
+public class OrderEventHandler {
+    @EventListener
+    public void onOrderConfirmed(OrderConfirmedEvent event) {
+        // 发送消息队列 / 邮件 / 审计日志
+        messageProducer.send("order.confirmed", event);
+    }
+}
+```
+
+#### 24.11.4 Spring Modulith — 显式模块边界
+
+DDD 强调**限界上下文**的隔离。Spring Modulith（Spring 生态）提供了显式模块验证：
+
+```java
+// 模块结构: com.example.orders / com.example.payments / com.example.shipping
+// Modulith 自动验证模块间的依赖规则
+
+@Test
+void verifyModularity() {
+    // ★ 验证每个模块只暴露 public API, 内部不互相侵入
+    ApplicationModules.of(MyApplication.class).verify();
+}
+
+// 模块间通过事件通信, 不直接调用
+@ApplicationModuleListener  // Modulith 增强的 @EventListener
+public void onOrderConfirmed(OrderConfirmedEvent event) {
+    // 跨模块通信只通过事件!
+}
+```
+
+#### 24.11.5 Spring 对 DDD 的"不做"
+
+| DDD 概念 | Spring 态度 | 原因 |
+|----------|-----------|------|
+| 聚合根显式标记 | ❌ 不内置 | 用 `@Entity` + 命名约定代替 |
+| 限界上下文 | ⚠️ Modulith 可选 | 用包结构 + Modulith 验证 |
+| 值对象不可变性 | ❌ 不强制 | 靠开发者自律 + `@Embeddable` |
+| 规约模式 Specification | ✅ 内置 | `JpaSpecificationExecutor` |
+| 事件溯源 Event Sourcing | ❌ 不内置 | 需 Axon Framework 等第三方 |
+
+> Spring 的哲学：**提供基础设施但不强制架构范式**。你可以用 Spring 写 DDD，也可以写传统三层，也可以写 CQRS——Spring 不为任何一种范式"站队"。
+
 ---
 
 ## 25. 常见坑与反模式
