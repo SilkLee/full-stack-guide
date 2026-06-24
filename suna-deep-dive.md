@@ -1,6 +1,6 @@
-# Kortix / Suna 项目源码深度剖析
+# Suna Agent 平台 — 定制化二次开发技术参考
 
-> 20K Stars · TypeScript Monorepo · **"公司即 Git 仓库"** — AI Agent 编排平台的完整技术拆解。
+> 基于 Suna v0.9.5 Fork，面向 AutoCorp 内部 AWS 部署。本文档是二次开发团队的技术参考——架构理解、定制点、集成方案。
 
 ---
 
@@ -23,6 +23,28 @@
 - [15. 技术架构深度解析](#15-技术架构深度解析)
 - [16. 架构总结](#16-架构总结)
 - [17. AutoCorp 企业级 AWS 部署方案](#17-autocorp-企业级-aws-部署方案)
+
+---
+
+## 0. 二次开发改造清单
+
+在 Fork Suna 源码后，以下模块需要定制：
+
+| 优先级 | 模块 | 改造内容 | 工作量 | 参考章节 |
+|--------|------|----------|--------|----------|
+| P0 | **品牌去 Kortix** | Logo、名称、启动 Banner、Agent 系统提示词 | 3天 | 全文 |
+| P0 | **LLM 网关** | 停用自带 Gateway，指向 LiteLLM | 1天 | §17.2 |
+| P0 | **认证** | Supabase Auth → Azure AD OIDC | 2天 | §17.8 |
+| P1 | **Skills 管理** | 停用本地 Skills，接中央 Skills 平台 | 3天 | §17.3 |
+| P1 | **MCP 工具体系** | 停用 Pipedream，接内部 MCP Server | 2天 | §17.4 |
+| P1 | **Git 托管** | GitHub → 内部 GitLab | 1天 | §5 |
+| P1 | **前端文案** | 全局文案 AutoCorp 化 | 2天 | §7 |
+| P2 | **CI/CD** | GitLab CI + ECR + ECS 部署流水线 | 2天 | §14.6 |
+| P2 | **审计** | Sentry → Splunk SIEM | 2天 | §17.3 |
+| P2 | **密钥管理** | dotenvx + AWS SM → 统一 KMS | 1天 | §17.5 |
+| P2 | **沙箱镜像** | 构建含 AutoCorp CA + 企业工具的基础镜像 | 1天 | §17.5 |
+
+**总工期**：约 20 人天（2 人 × 2 周）。
 
 ---
 
@@ -1256,4 +1278,4 @@ flowchart LR
 
 ---
 
-*全文 17 章，基于 Suna v0.9.5 源码分析 + AutoCorp 企业部署方案编写。*
+*本文档面向 AutoCorp 内部开发团队，基于 Suna v0.9.5 源码 Fork 版编写。最后更新：2026-06-24。*
