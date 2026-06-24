@@ -97,10 +97,10 @@ flowchart TB
 ```json
 {
   "runtime": "Bun (替代 Node.js)",
-  "framework": "Hono (类 Express, 极快, Web 标准)",
-  "llm": "LiteLLM (统一 100+ LLM 接口)",
-  "database": "Supabase (PostgreSQL + Auth + Storage + Realtime)",
-  "package_manager": "pnpm (monorepo)"
+  "framework": "Hono + OpenAPIHono (@hono/zod-openapi)",
+  "llm": "自建 LLM Gateway (OpenRouter + LiteLLM 统一 100+ 模型)",
+  "database": "Supabase (PostgreSQL) + Drizzle ORM",
+  "package_manager": "pnpm (monorepo, 72h release age 供应链防护)"
 }
 ```
 
@@ -381,23 +381,201 @@ flowchart TB
 基础设施:
   - Docker (沙箱运行时)
   - s6 (沙箱内进程管理器)
-  - Docker Hub (镜像仓库)
-  - Vercel (前端部署)
-  - JustAVPS (沙箱 VPS 托管)
-  - AWS Secrets Manager (生产密钥)
+| **Docker** | Docker 沙箱运行时 |
+| **s6** | 沙箱内进程管理器 |
+| **Daytona SDK** | 沙箱编排（启动/停止/快照/代理） |
+| **Docker Hub** | 镜像仓库（多架构 amd64+arm64） |
+| **Vercel** | 前端部署 |
+| **JustAVPS** | 沙箱 VPS 托管 |
+| **AWS Secrets Manager** | 生产密钥 |
 
-Agent:
-  - OpenCode (Agent 引擎)
-  - Playwright (浏览器自动化)
-  - MCP / OpenAPI / GraphQL (工具连接)
+| **Agent** | OpenCode（Agent 引擎） |
+| **Playwright** | 浏览器自动化 |
+| **MCP / OpenAPI / GraphQL** | 工具连接协议 |
+| **kortix-sandbox-agent-server** | 沙箱内常驻守护进程（Go 二进制） |
 
-DevOps:
-  - GitHub Actions (CI/CD)
-  - pnpm (monorepo)
-  - dotenvx (密钥加密)
-  - Gitleaks (密钥扫描)
+| **DevOps** | GitHub Actions (CI/CD) · pnpm monorepo · dotenvx 密钥加密 · Gitleaks 密钥扫描 · pnpm minimumReleaseAge 72h 供应链防护 |
+
+---
+
+## 11. 源码级技术亮点
+
+> 基于 `suna-main` 源码真实分析。
+
+### 11.1 API 层：OpenAPI 驱动开发
+
+```typescript
+// apps/api/src/index.ts — 不是手写路由，而是 OpenAPI 自动生成
+import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+
+const app = new OpenAPIHono();
+
+// ★ 每个端点 = Zod Schema + OpenAPI 元数据
+// 自动生成 /v1/openapi.json + Scalar API 文档 /v1/docs
+app.openapi(
+  createRoute({
+    method: 'get', path: '/health',
+    tags: ['system'],
+    responses: { 200: json(HealthSchema) },
+  }),
+  healthHandler,
+);
+
+// ★ Zod 定义的 Schema 即 API 合约
+const HealthSchema = z.object({
+  status: z.string(), version: z.string(),
+  uptime_seconds: z.number(), memory_mb: z.number(),
+  // ... 自动校验请求/响应
+}).openapi('Health');
+```
+
+**为什么牛逼**：API 合约和校验是一份 Zod Schema，改了 Schema 自动同步文档，不会出现"文档和实现对不上"。
+
+### 11.2 事件循环 Lag 健康检查
+
+```typescript
+// ★ 独创: 用真实的 Event Loop 延迟作为存活探针
+// 常规 /health 返回 "OK" 即使 Event Loop 被阻塞也不会失败
+// 这导致 2026-06-18 的线上事故：Pod 僵死但 k8s 没重启 → 90 分钟故障
+
+const MAX_EVENT_LOOP_LAG_MS = 5000;
+let eventLoopLagMs = 0;
+
+const lagTimer = setInterval(() => {
+  const now = performance.now();
+  // ★ 实际延迟 = 现在 - 上次 - 间隔
+  eventLoopLagMs = Math.max(0, now - lastSample - 1000);
+  lastSample = now;
+}, 1000);
+
+// /health/live: Event Loop 延迟 > 5s → 返回 503
+// kubelet 看到 503 → 自动重启僵死 Pod
+app.get('/health/live', (c) => {
+  if (eventLoopLagMs > MAX_EVENT_LOOP_LAG_MS)
+    return c.json({ status: 'degraded' }, 503);
+  return c.json({ status: 'ok', event_loop_lag_ms: eventLoopLagMs });
+});
+```
+
+### 11.3 领导者选举 + 单例 Worker 模式
+
+```typescript
+// ★ 多副本 API 部署下，定时任务只在一个 Pod 运行
+// 通过数据库 Leader Election 避免重复触发
+// 
+// 启动流程:
+//   每个 Pod → startReplicaServices()（隧道、缓存、清理）
+//   然后 → startLeaderElection()
+//   拿到租约的 Pod → startSingletonWorkers()
+//     ├── 定时任务调度器 (trigger scheduler)
+//     ├── 预热池管理 (warm pool)
+//     ├── 项目维护 (maintenance)
+//     └── 遗留迁移 (legacy migration)
+//   其他 Pod → 只处理 API 请求
+
+startLeaderElection({
+  onAcquire: () => startSingletonWorkers(),
+  onRelease: () => stopSingletonWorkers(),
+}, { eligible: runsSingletonWorkers() });
+```
+
+### 11.4 供应链安全：pnpm 72 小时冷却
+
+```yaml
+# pnpm-workspace.yaml — 生产级供应链防护
+# ★ 任何新发布的包需要 72 小时才能被解析
+# 防止 TanStack 2026-05-11 类型的供应链攻击
+# （攻击者发布恶意版本 → 几小时内被发现 → 但已安装的无法撤销）
+minimumReleaseAge: 4320  # 72 小时
+
+# ★ 禁止任意 postinstall 脚本执行
+# 只允许白名单中的包运行生命周期脚本
+dangerouslyAllowAllBuilds: false
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - next
+  # ... 严格白名单
+```
+
+### 11.5 dotenvx 加密密钥入 Git
+
+```bash
+# ★ 密钥加密后直接提交到 Git（不是 .gitignore!）
+# apps/api/.env 中的密钥: KEY=encrypted:xxxx...
+# 解密密钥存在 Dotenv Armor（离线设备）
+# 任何人 clone 了代码也看不到真实密钥
+
+# 开发:
+pnpm dev  # 自动解密 apps/api/.env
+
+# 生产:
+# API 从 AWS Secrets Manager 加载（不入 Git）
+
+# 三个环境三套密钥:
+# apps/api/.env       → 本地开发
+# apps/api/.env.dev   → 测试环境
+# apps/api/.env.prod  → 生产环境（本地调试用）
+```
+
+### 11.6 LLM 网关：统一计费 + 路由
+
+```typescript
+// ★ 自建 LLM 网关，非简单透传
+const { createLlmGateway } = await import('./llm-gateway');
+
+app.route('/v1/llm', createLlmGateway(
+  {
+    enabled: config.LLM_GATEWAY_ENABLED,
+    openrouterApiKey: config.OPENROUTER_API_KEY,
+    markup: llmPriceMarkup(),           // ★ 模型加价策略
+    appName: 'Kortix',
+  },
+  {
+    // ★ 认证: 沙箱 Token → 用户身份
+    authenticateToken: async (token) => { /* ... */ },
+    
+    // ★ 计费: 每次 LLM 调用扣费
+    recordUsage: async (event) => {
+      await recordUsageEvent({ /* tokens, cost, model */ });
+      await deductForLlmUsage({ accountId, costUsd, /* ... */ });
+    },
+  },
+));
+```
+
+### 11.7 Sandbox Proxy：统一隧道
+
+```typescript
+// ★ 核心创新: 统一沙箱代理
+// 无论沙箱在哪里（Daytona Cloud / 本地 Docker），统一路由
+
+// Pattern: /v1/p/{sandboxId}/{port}/*
+//   Cloud:  sandboxId = Daytona external ID → Daytona SDK 代理
+//   Local:  sandboxId = container name → Docker DNS
+
+app.route('/v1/p', sandboxProxyApp);
+
+// 还支持子域名预览路由:
+// p{port}-{sandboxId}.localhost:{apiPort}/...
+// 让沙箱内的 Web 应用可以通过真实域名访问
 ```
 
 ---
 
-*基于 Suna v0.9.5 源码及公开文档编写。*
+## 12. 架构真相比对
+
+| 我的初始猜测 | 源码真相 |
+|-------------|---------|
+| Prisma ORM | **Drizzle ORM** |
+| Express.js API | **Hono + OpenAPIHono** |
+| Node.js 运行时 | **Bun**（不是 Node.js） |
+| 简单健康检查 | **Event Loop Lag 探针** |
+| 单体 API | **Leader Election + 单例 Worker** |
+| 标准 .gitignore 密钥 | **dotenvx 加密入 Git** + AWS Secrets Manager |
+| 普通 LLM 透传 | **自建 LLM Gateway + 统一计费** |
+| 普通 monorepo | **72h release age + postinstall 白名单** |
+
+---
+
+*本文基于 Suna v0.9.5 源码分析编写。*
