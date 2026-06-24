@@ -931,22 +931,22 @@ Skills 是**可复用的领域知识模块**，Markdown + 可执行脚本：
 | `thermo-nuclear-review` | 激进代码审查 |
 | `agent-browser` | Playwright Web 自动化 |
 
-### 14.6 GitOps 部署流水线
+### 14.6 运维：Suna 自身如何升级（与你无关，仅供参考）
+
+> **先澄清**：这是 Suna 开发团队发布 Suna 软件的流程。你部署 Suna 只需拉 Docker 镜像：`docker pull kortix/kortix-api:v0.9.5`，升级时换版本号即可。以下流程你不需要管。
+
+Suna 团队自己的发布流水线（GitOps 原意——改 Git 即部署）：
 
 ```mermaid
 flowchart LR
-    PR["Pull Request"] --> CI["CI: CodeQL + Secret Scan + Build"]
-    CI --> MERGE["Merge → main"]
-    MERGE --> DEV_DEPLOY["Auto Deploy → dev.kortix.com<br/>Worker → EKS + Vercel"]
-    
-    DEV_DEPLOY --> PROMOTE["★ Promote to Production<br/>打开 release PR → prod 分支"]
-    PROMOTE --> RETAG["★ Retag, 不 Rebuild<br/>prod 使用 dev 上验证过的<br/>精确镜像字节"]
-    RETAG --> PROD_DEPLOY["Argo CD 同步 → EKS<br/>Vercel Deploy → kortix.com"]
-    
-    PROD_DEPLOY --> RELEASE["版本发布 vX.Y.Z<br/>4 个制品: API + Frontend + CLI + Desktop"]
+    PR["开发提交代码"] --> CI["自动检查 + 构建"]
+    CI --> MERGE["合并到 main"]
+    MERGE --> DEV["自动部署到测试环境"]
+    DEV --> PROMOTE["测试通过 → 打生产版本号"]
+    PROMOTE --> PROD["自动部署到生产"]
 ```
 
-**关键原则：Retag, Don't Rebuild**——生产部署使用在 dev 上验证过的**同一个镜像字节**，只是换个 tag。保证 dev 测试通过的东西到 prod 不会出现构建差异。
+**为什么叫 GitOps**：运维人员不敲命令，只改 Git 里的版本号 → 系统自动部署。就像你改了一个 Excel 单元格，自动触发了一个审批流程。
 
 ---
 
