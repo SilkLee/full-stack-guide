@@ -95,7 +95,9 @@
 
 ---
 
-## 1. 项目概览与愿景
+## 1. 项目概览与愿景 `👥 全员`
+
+> **PM 一句话**：这是 AI 员工平台——发任务给 AI，它去查系统、写分析、出报告，干完交给人审核。公司经验自动积累，越用越聪明。底层 Fork 自开源 Suna（20K GitHub Stars）。
 
 ```mermaid
 flowchart LR
@@ -119,7 +121,9 @@ flowchart LR
 
 ---
 
-## 2. 整体架构
+## 2. 整体架构 `🏗 架构师 · 👥 全员`
+
+> **PM 一句话**：系统分四层——用户界面（Web/Slack）→ API（大脑）→ 数据库（记忆）→ 沙箱（AI 干活的地方）。每层独立，坏了不影响其他。
 
 ```mermaid
 flowchart TB
@@ -167,7 +171,9 @@ flowchart TB
 
 ---
 
-## 3. 后端 API 核心
+## 3. 后端 API 核心 `🔧 开发 · 🏗 架构`
+
+> **PM 一句话**：API 是系统的大脑——接收用户请求、调度 Agent 沙箱、记录结果。技术栈是 TypeScript（开发效率最高的全栈语言）。
 
 ### 3.1 技术选型
 
@@ -237,7 +243,9 @@ sequenceDiagram
 
 ---
 
-## 4. Agent 运行时沙箱
+## 4. Agent 运行时沙箱 `🏗 架构 · 🔧 运维`
+
+> **PM 一句话**：沙箱 = 给 AI 配了一台独立虚拟机。AI 在虚拟机里随便折腾，不会影响其他人，干完活自动销毁。
 
 ### 4.1 沙箱设计
 
@@ -276,7 +284,9 @@ flowchart TB
 
 ---
 
-## 5. Git 原生工作流
+## 5. Git 原生工作流 `👥 全员 · 🏗 架构`
+
+> **PM 一句话**：Git 就是公司的"硬盘"——所有人的任务和 AI 的产出都存在这里。谁改了什么都记录在案，改错了能回退，跟 Word 的修订模式一个道理。
 
 这是 Kortix **最核心的创新**。
 
@@ -357,7 +367,9 @@ supply-chain/                    ← 这个文件夹 = 一个 Git 仓库
 ---
 ---
 
-## 6. 用户交互与产品功能全景
+## 6. 用户交互与产品功能全景 `📋 产品 · 👥 全员`
+
+> **PM 一句话**：用户不需要懂技术。在 Slack 里 @一下机器人，或者在 Web 界面聊天，就能给 AI 派活。AI 干完了会通知你来审核。
 
 > 架构是骨架，这一节是血肉——Kortix 的用户实际能看到什么、点击什么、产出什么。
 
@@ -448,7 +460,9 @@ sequenceDiagram
 
 
 
-## 7. 前端与 CLI
+## 7. 前端与 CLI `🔧 开发`
+
+> **面向开发者和超级用户**的交互方式：Web Dashboard（可视化）、CLI 命令行（脚本和自动化）。普通员工不需要看这节。
 
 ### 6.1 前端架构
 
@@ -489,7 +503,9 @@ kortix models pull llama3:8b     # 拉取本地模型 (Ollama)
 
 ---
 
-## 8. 安全模型
+## 8. 安全模型 `🏗 架构 · 🔧 运维`
+
+> **PM 一句话**：三层防护——谁能用（Azure AD 登录）、密钥不泄露（加密后 AI 看不到）、干啥都有记录（审计）。满足德国 GDPR 合规。
 
 ```mermaid
 flowchart TB
@@ -518,7 +534,9 @@ flowchart TB
 
 ---
 
-## 9. 关键设计决策分析
+## 9. 关键设计决策分析 `🏗 架构 · 📋 产品`
+
+> **PM 一句话**：为什么选 Git 不选数据库？为什么每个 AI 要给独立虚拟机？这节解释背后的"为什么"。
 
 ### 8.1 为什么每个会话一个 Docker 沙箱？
 
@@ -552,7 +570,9 @@ flowchart TB
 
 ---
 
-## 10. 与传统 Agent 框架对比
+## 10. 与传统 Agent 框架对比 `📋 产品 · 🏗 架构`
+
+> **PM 一句话**：LangChain 是给程序员用的工具箱，我们是给全公司用的 AI 员工系统。把 Suna 和 LangChain 放在一起比，就像把 Office 365 和 Python 放在一起比——不是一个维度的东西。
 
 | 维度 | Kortix | LangChain | AutoGPT | CrewAI |
 |------|--------|-----------|---------|--------|
@@ -772,7 +792,9 @@ app.route('/v1/p', sandboxProxyApp);
 
 ---
 
-## 14. 业务架构深度解析
+## 14. 业务架构深度解析 `📋 产品 · 👥 全员`
+
+> **PM 一句话**：商业模式是三级火箭——免费自托管（开发者试用）→ Cloud 按量收费（中小公司）→ Enterprise 私有部署（大公司，就是我们这个场景）。
 
 ### 13.1 商业模型 — 三级火箭
 
@@ -1363,6 +1385,28 @@ flowchart LR
 | 认证 | Supabase Auth | **Azure AD OIDC** |
 | 审计 | Sentry + OTEL | **Splunk SIEM** |
 | Git 仓库 | 任意 Git 托管（Suna 团队用 GitHub Dogfooding） | **内部 GitLab** |
+
+---
+
+## 附录：术语表 `👥 全员`
+
+| 术语 | 全称 | 大白话 |
+|------|------|--------|
+| **Git** | — | 版本管理工具。像 Word 的"修订模式"——谁改了啥、啥时候改的，都能追溯，改错了能回退 |
+| **Git 仓库** | Git Repository | 一个文件夹，里面存了 Agent 配置 + 公司经验 + 产出文件。Git 负责记录这个文件夹的一切变更 |
+| **Docker** | — | 虚拟化技术。给每个 AI 配一台"用完就扔的虚拟机"，AI 在上面随便折腾不伤系统 |
+| **沙箱 / Sandbox** | — | 就是上面那个用完就扔的虚拟机。每次 AI 干活都建一个新的 |
+| **Change Request / CR** | — | AI 干完活提交的"审批单"。里面是它改了什么，等人审核后才能生效 |
+| **Agent** | — | AI 员工。每个 Agent 有明确的角色（如"SAP 分析师"）和能用的工具 |
+| **Skill** | — | 技能知识。告诉 Agent "怎么干活"，比如"SAP 查询必须带 werks 参数" |
+| **Memory** | — | 公司记忆。Agent 每次干活积累的经验，下次 Agent 能读到 |
+| **MCP** | Model Context Protocol | 工具连接协议。让 Agent 能查 SAP、操作 Jira、读 SharePoint 的桥梁 |
+| **LiteLLM** | — | 模型网关。统一管理 GPT-4、Claude 等大模型，负责路由和计费 |
+| **LLM** | Large Language Model | 大语言模型。GPT-4、Claude 这些"AI 大脑"的总称 |
+| **API** | Application Programming Interface | 系统后端。接收 Web/Slack 发来的请求，调度 Agent 干活的"中枢" |
+| **Supabase** | — | 开源数据库 + 用户登录 + 文件存储。我们 Fork 后替换为公司内部认证系统 |
+| **ECS** | Elastic Container Service | AWS 的容器管理服务。Docker 容器跑在上面 |
+| **ECR** | Elastic Container Registry | AWS 的镜像仓库。存我们定制好的 Docker 镜像 |
 
 ---
 
