@@ -231,6 +231,8 @@ flowchart TB
     REVIEW -->|"关闭"| DISCARD["沙箱销毁<br/>更改丢弃"]
 ```
 
+**Git 是协议，不是平台**——Suna 只依赖标准 Git（clone/push/branch/commit），不绑定任何托管平台。Suna 团队自己用 GitHub 托管 Suna 源码，这是他们"用 Suna 开发 Suna"的 Dogfooding。你部署时，项目仓库指向内部 GitLab 即可，零代码改动。
+
 **与传统 Agent 的本质区别**：
 
 | 维度 | LangChain/AutoGPT | Kortix |
@@ -474,7 +476,7 @@ flowchart TB
 | **Agent 引擎** | OpenCode | 文件操作 + 执行 + PR |
 | **连接器** | MCP + OpenAPI + GraphQL + Pipedream（3000+ 应用） | |
 | **密钥管理** | dotenvx 加密入 Git（本地）+ AWS Secrets Manager（生产） | |
-| **CI/CD** | GitHub Actions · Argo CD GitOps · Docker Hub 多架构镜像 | |
+| **CI/CD** | CI Pipeline · Argo CD GitOps · Docker Hub 多架构镜像 | |
 | **可观测性** | Sentry + OpenTelemetry + Prometheus | |
 | **供应链** | pnpm monorepo · 72h release age · postinstall 白名单 | |
 
@@ -766,8 +768,8 @@ flowchart TB
         SBN["沙箱 N<br/>最大数千并行"]
     end
 
-    subgraph CI["CI/CD"]
-        GHA["GitHub Actions<br/>PR 检查 + 构建"]
+    subgraph CI["CI/CD — Suna 团队自己的流水线"]
+        GHA["CI Pipeline<br/>PR 检查 + 构建"]
         ARGO["Argo CD<br/>GitOps 部署到 EKS"]
     end
 
@@ -912,7 +914,7 @@ sequenceDiagram
 | Agent | 角色 | 工具权限 | 触发方式 |
 |-------|------|----------|----------|
 | **kortix** | 通用知识工作者 | 全部工具 | 手动/聊天/API |
-| **pr-bot** | PR 审查 + 预览环境 | GitHub + 文件系统 + 浏览器 | GitHub Webhook |
+| **pr-bot** | ★ Suna 团队自用（Dogfooding）<br/>PR 审查 + 预览环境 | Git + 文件系统 + 浏览器 | Webhook（可配 GitLab） |
 | **memory-reflector** | 记忆整理 | memory 工具 | 定时任务 |
 
 ### 14.5 Skills 体系
@@ -941,7 +943,7 @@ flowchart LR
     PROMOTE --> RETAG["★ Retag, 不 Rebuild<br/>prod 使用 dev 上验证过的<br/>精确镜像字节"]
     RETAG --> PROD_DEPLOY["Argo CD 同步 → EKS<br/>Vercel Deploy → kortix.com"]
     
-    PROD_DEPLOY --> RELEASE["GitHub Release vX.Y.Z<br/>4 个制品: API + Frontend + CLI + Desktop"]
+    PROD_DEPLOY --> RELEASE["版本发布 vX.Y.Z<br/>4 个制品: API + Frontend + CLI + Desktop"]
 ```
 
 **关键原则：Retag, Don't Rebuild**——生产部署使用在 dev 上验证过的**同一个镜像字节**，只是换个 tag。保证 dev 测试通过的东西到 prod 不会出现构建差异。
@@ -1187,7 +1189,7 @@ flowchart LR
 | Secrets | dotenvx + AWS SM | **统一 AWS KMS** |
 | 认证 | Supabase Auth | **Azure AD OIDC** |
 | 审计 | Sentry + OTEL | **Splunk SIEM** |
-| Git 仓库 | GitHub | **内部 GitLab** |
+| Git 仓库 | 任意 Git 托管（Suna 团队用 GitHub Dogfooding） | **内部 GitLab** |
 
 ---
 
