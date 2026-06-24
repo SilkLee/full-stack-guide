@@ -931,22 +931,85 @@ Skills 是**可复用的领域知识模块**，Markdown + 可执行脚本：
 | `thermo-nuclear-review` | 激进代码审查 |
 | `agent-browser` | Playwright Web 自动化 |
 
-### 14.6 运维：Suna 自身如何升级（与你无关，仅供参考）
+### 14.6 CI/CD 部署流水线 — 二次开发必须掌握
 
-> **先澄清**：这是 Suna 开发团队发布 Suna 软件的流程。你部署 Suna 只需拉 Docker 镜像：`docker pull kortix/kortix-api:v0.9.5`，升级时换版本号即可。以下流程你不需要管。
+你需要 Fork Suna 源码 → 定制 → 构建自己的镜像 → 部署到 AutoCorp AWS。
 
-Suna 团队自己的发布流水线（GitOps 原意——改 Git 即部署）：
+**完整流程**：
 
 ```mermaid
 flowchart LR
-    PR["开发提交代码"] --> CI["自动检查 + 构建"]
-    CI --> MERGE["合并到 main"]
-    MERGE --> DEV["自动部署到测试环境"]
-    DEV --> PROMOTE["测试通过 → 打生产版本号"]
-    PROMOTE --> PROD["自动部署到生产"]
+    CODE["改代码<br/>定制 LLM 网关、MCP、Logo"] --> BUILD["构建镜像<br/>docker build -t autocorp-agent-api"]
+    BUILD --> PUSH["推送到 ECR<br/>内部镜像仓库"]
+    PUSH --> DEPLOY["更新 ECS<br/>换上新镜像"]
+    DEPLOY --> VERIFY["验证 /health<br/>新版本生效"]
 ```
 
-**为什么叫 GitOps**：运维人员不敲命令，只改 Git 里的版本号 → 系统自动部署。就像你改了一个 Excel 单元格，自动触发了一个审批流程。
+**具体操作**：
+
+```bash
+# 1. 构建 API 镜像
+cd apps/api
+docker build -t autocorp-agent-api:v1.0 .
+
+# 2. 推送到 AutoCorp ECR
+aws ecr get-login-password | docker login --username AWS --password-stdin \
+  123456789.dkr.ecr.eu-central-1.amazonaws.com
+docker tag autocorp-agent-api:v1.0 \
+  123456789.dkr.ecr.eu-central-1.amazonaws.com/autocorp-agent-api:v1.0
+docker push 123456789.dkr.ecr.eu-central-1.amazonaws.com/autocorp-agent-api:v1.0
+
+# 3. 更新 ECS Service（用新镜像）
+aws ecs update-service \
+  --cluster autocorp-agent \
+  --service api \
+  --force-new-deployment
+
+# 4. 验证
+curl https://agent.internal.autocorp.com/v1/health
+```
+
+**日常升级流程**：
+
+```
+1. git pull 拉 Suna 上游更新
+2. 合并到你的 fork（解决冲突）
+3. 重新构建镜像
+4. 先在测试环境验证
+5. 确认无误后推到生产
+```
+
+**如果嫌手动麻烦，可以配 GitLab CI**：
+
+```yaml
+# .gitlab-ci.yml — 自动化构建和部署
+stages:
+  - build
+  - deploy
+
+build-api:
+  stage: build
+  script:
+    - docker build -t $ECR_REGISTRY/autocorp-agent-api:$CI_COMMIT_SHORT_SHA apps/api/
+    - docker push $ECR_REGISTRY/autocorp-agent-api:$CI_COMMIT_SHORT_SHA
+  only:
+    - main
+
+deploy-dev:
+  stage: deploy
+  script:
+    - aws ecs update-service --cluster autocorp-agent-dev --service api --force-new-deployment
+  only:
+    - main
+
+deploy-prod:
+  stage: deploy
+  script:
+    - aws ecs update-service --cluster autocorp-agent-prod --service api --force-new-deployment
+  only:
+    - tags  # 打 tag 才部署生产
+  when: manual  # 需要手动确认
+```
 
 ---
 
