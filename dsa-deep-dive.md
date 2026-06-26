@@ -125,6 +125,26 @@ public int lengthOfLongestSubstring(String s) {
 
 ### 3.1 反转链表
 
+```mermaid
+flowchart LR
+    subgraph S0["初始"]
+        A0["prev=null"] -.-> B0["1→2→3→null"]
+        C0["curr=1"]
+    end
+    subgraph S1["Step1"]
+        A1["null←1"] -.-> B1["2→3→null"]
+        C1["prev=1, curr=2"]
+    end
+    subgraph S2["Step2"]
+        A2["null←1←2"] -.-> B2["3→null"]
+        C2["prev=2, curr=3"]
+    end
+    subgraph S3["完成"]
+        A3["null←1←2←3"]
+    end
+    S0 --> S1 --> S2 --> S3
+```
+
 ```
 反转前: 1→2→3→null
 反转后: 3→2→1→null
@@ -535,6 +555,20 @@ public List<Integer> morrisInorder(TreeNode root) {
 
 ### 9.1 全排列
 
+```mermaid
+flowchart TB
+    ROOT["[]"] --> L1["[1]"] & L2["[2]"] & L3["[3]"]
+    L1 --> L1A["[1,2]"] & L1B["[1,3]"]
+    L2 --> L2A["[2,1]"] & L2B["[2,3]"]
+    L3 --> L3A["[3,1]"] & L3B["[3,2]"]
+    L1A --> L1A1["[1,2,3] ✅"]
+    L1B --> L1B1["[1,3,2] ✅"]
+    L2A --> L2A1["[2,1,3] ✅"]
+    L2B --> L2B1["[2,3,1] ✅"]
+    L3A --> L3A1["[3,1,2] ✅"]
+    L3B --> L3B1["[3,2,1] ✅"]
+```
+
 ```java
 public List<List<Integer>> permute(int[] nums) {
     List<List<Integer>> res = new ArrayList<>();
@@ -609,6 +643,16 @@ private void dfsNQ(List<List<String>> res, char[][] board, int row,
 ## 10. 动态规划
 
 ### 10.1 01 背包 (一维优化)
+
+```mermaid
+flowchart LR
+    subgraph FORWARD["正序 - 物品重复用!"]
+        F1["dp[0]"] --> F2["dp[1]用dp[0]"] --> F3["dp[2]用dp[1]<br/>★同一物品多次!"]
+    end
+    subgraph BACKWARD["倒序 - 每个物品一次"]
+        B3["dp[2]用dp[1](旧)"] --> B2["dp[1]用dp[0](旧)"] --> B1["dp[0]"]
+    end
+```
 
 ```java
 public int knapsack(int[] w, int[] v, int cap) {
@@ -692,7 +736,22 @@ public int maxNonOverlap(int[][] intervals) {
 
 ## 12. 堆
 
-### 12.1 Top K + 中位数
+### 12.1 堆操作
+
+```mermaid
+flowchart TB
+    subgraph INSERT["插入 1"]
+        I1["[2,3,5,7,6,8]"] --> I2["加末尾: [2,3,5,7,6,8,1]"]
+        I2 --> I3["上浮1:比父5小→换"]
+        I3 --> I4["继续上浮:比父2小→换"]
+        I4 --> I5["★ [1,3,2,7,6,8,5]"]
+    end
+    subgraph POP["弹出堆顶1"]
+        P1["弹出1"] --> P2["末尾5放堆顶: [5,3,2,7,6,8]"]
+        P2 --> P3["下沉5:比子2大→换"]
+        P3 --> P4["★ [2,3,5,7,6,8]"]
+    end
+```
 
 ```java
 // Top K
@@ -722,6 +781,23 @@ class MedianFinder {
 ## 13. 图论
 
 ### 13.1 拓扑排序 (BFS Kahn)
+
+```mermaid
+flowchart TB
+    subgraph GRAPH["课程依赖图"]
+        A["A"] --> C["C"]
+        B["B"] --> C
+        C --> D["D"]
+        C --> E["E"]
+    end
+    subgraph ORDER["BFS 排序"]
+        O1["入度为0: A,B"] --> O2["出A,C入度-1"]
+        O2 --> O3["出B,C入度=0→入队"]
+        O3 --> O4["出C,D=0,E=0→入队"]
+        O4 --> O5["出D,E → 完成"]
+    end
+    GRAPH -.-> ORDER
+```
 
 ```java
 public int[] topologicalSort(int n, int[][] edges) {
@@ -784,6 +860,15 @@ public int[] dijkstra(int n, int[][][] g, int start) {
 
 ### 14.1 Trie
 
+```mermaid
+flowchart TB
+    ROOT["root"] --> A["a"] & B["b"]
+    A --> P["p"] --> P2["p"] --> P3["l"] --> E1["e★=true"]
+    B --> E["e"] --> D["d★=true"]
+    E --> N["n"] --> T["t★=true"]
+    NOTE["存储: app, apple, bed, bent"]
+```
+
 ```java
 class Trie {
     TrieNode root = new TrieNode();
@@ -809,6 +894,20 @@ class Trie {
 ```
 
 ### 14.2 并查集
+
+```mermaid
+flowchart TB
+    subgraph INIT["初始: 各自独立"]
+        I1["0"] & I2["1"] & I3["2"] & I4["3"] & I5["4"]
+    end
+    subgraph AFTER["union(0,1) union(1,2) union(3,4)"]
+        A1["0→1→2"] & A2["3→4"]
+    end
+    subgraph COMPRESS["find(0)后路径压缩"]
+        C1["0→2, 1→2"] & C2["3→4"]
+    end
+    INIT --> AFTER --> COMPRESS
+```
 
 ```java
 class UnionFind {
