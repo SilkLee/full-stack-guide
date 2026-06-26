@@ -1009,4 +1009,677 @@ long count = list.stream().filter(x -> x > 0).count();
 
 ---
 
-*全文 20 章 Java 版，从初级到高级，覆盖面试 95% 算法题。*
+## 21. 布隆过滤器 Bloom Filter
+
+**应用**：Redis 缓存穿透防护、Google BigTable、Chrome 恶意 URL 检测。
+
+```java
+// 用 BitSet + 多个 Hash 函数实现
+class BloomFilter {
+    private BitSet bits;
+    private int size, hashCount;
+    
+    public BloomFilter(int expectedSize, double fpp) {
+        // n = 预期插入量, p = 误判率
+        size = (int) (-expectedSize * Math.log(fpp) / (Math.log(2) * Math.log(2)));
+        hashCount = (int) (size / expectedSize * Math.log(2));
+        bits = new BitSet(size);
+    }
+    
+    public void add(String s) {
+        for (int i = 0; i < hashCount; i++) {
+            bits.set(hash(s, i) % size);
+        }
+    }
+    
+    public boolean mightContain(String s) {
+        for (int i = 0; i < hashCount; i++) {
+            if (!bits.get(hash(s, i) % size)) return false;
+        }
+        return true;
+    }
+    
+    private int hash(String s, int seed) {
+        int h = seed;
+        for (char c : s.toCharArray()) h = h * 31 + c;
+        return Math.abs(h);
+    }
+}
+```
+
+| 特性 | 说明 |
+|------|------|
+| 空间 | 极小 (1 亿数据 ~120MB) |
+| 查询 | O(k), k = hash 次数 |
+| 误报 | 可能说"有"但实际"没有" |
+| 漏报 | 不可能说"没有"但实际"有" |
+
+---
+
+## 22. 跳表 Skip List
+
+**应用**：Redis ZSet 底层、LevelDB MemTable。
+
+```java
+class SkipListNode {
+    int val;
+    SkipListNode[] next;  // next[i] = 第 i 层的下一个节点
+    
+    public SkipListNode(int val, int level) {
+        this.val = val;
+        this.next = new SkipListNode[level + 1];
+    }
+}
+
+class SkipList {
+    private static final double P = 0.5;
+    private static final int MAX_LEVEL = 16;
+    private SkipListNode head;
+    private int level;
+    private Random rand = new Random();
+    
+    public SkipList() {
+        head = new SkipListNode(Integer.MIN_VALUE, MAX_LEVEL);
+        level = 0;
+    }
+    
+    public boolean search(int target) {
+        SkipListNode cur = head;
+        for (int i = level; i >= 0; i--) {
+            while (cur.next[i] != null && cur.next[i].val < target)
+                cur = cur.next[i];
+        }
+        cur = cur.next[0];
+        return cur != null && cur.val == target;
+    }
+    
+    public void add(int num) {
+        SkipListNode[] update = new SkipListNode[MAX_LEVEL + 1];
+        SkipListNode cur = head;
+        for (int i = level; i >= 0; i--) {
+            while (cur.next[i] != null && cur.next[i].val < num)
+                cur = cur.next[i];
+            update[i] = cur;
+        }
+        
+        int newLevel = randomLevel();
+        if (newLevel > level) {
+            for (int i = level + 1; i <= newLevel; i++) update[i] = head;
+            level = newLevel;
+        }
+        
+        SkipListNode node = new SkipListNode(num, newLevel);
+        for (int i = 0; i <= newLevel; i++) {
+            node.next[i] = update[i].next[i];
+            update[i].next[i] = node;
+        }
+    }
+    
+    private int randomLevel() {
+        int lvl = 0;
+        while (rand.nextDouble() < P && lvl < MAX_LEVEL) lvl++;
+        return lvl;
+    }
+}
+```
+
+| 对比 | 跳表 | 红黑树 |
+|------|------|--------|
+| 实现复杂度 | **简单** | 复杂 |
+| 范围查询 | ✅ 天然支持 | ⚠️ 需中序遍历 |
+| 并发友好 | ✅ 局部锁 | ❌ 全局重平衡 |
+
+---
+
+## 23. Morris 遍历 (O(1) 空间遍历二叉树)
+
+```java
+// ★ 不使用栈/递归, O(1) 空间 O(n) 时间的中序遍历
+public List<Integer> morrisInorder(TreeNode root) {
+    List<Integer> res = new ArrayList<>();
+    TreeNode cur = root;
+    
+    while (cur != null) {
+        if (cur.left == null) {
+            res.add(cur.val);       // 无左子树 → 访问当前
+            cur = cur.right;         // 转向右
+        } else {
+            TreeNode pre = cur.left;
+            while (pre.right != null && pre.right != cur)
+                pre = pre.right;     // 找前驱
+    
+            if (pre.right == null) { // 第一次访问 → 建立线索
+                pre.right = cur;
+                cur = cur.left;
+            } else {                // 第二次访问 → 断开线索
+                pre.right = null;
+                res.add(cur.val);
+                cur = cur.right;
+            }
+        }
+    }
+    return res;
+}
+```
+
+---
+
+## 24. 图论进阶
+
+### 24.1 Floyd-Warshall — 全源最短路径 O(n³)
+
+```java
+// dist[i][j] 初始化为边的权值或 INF
+public void floydWarshall(int[][] dist, int n) {
+    for (int k = 0; k < n; k++)      // ★ 中转点放最外层
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                if (dist[i][k] + dist[k][j] < dist[i][j])
+                    dist[i][j] = dist[i][k] + dist[k][j];
+}
+```
+
+### 24.2 Bellman-Ford — 负权边 O(VE)
+
+```java
+public int[] bellmanFord(int n, int[][] edges, int start) {
+    int[] dist = new int[n];
+    Arrays.fill(dist, Integer.MAX_VALUE); dist[start] = 0;
+    
+    for (int i = 0; i < n - 1; i++) {  // 松弛 n-1 次
+        boolean updated = false;
+        for (int[] e : edges) {
+            int u = e[0], v = e[1], w = e[2];
+            if (dist[u] != Integer.MAX_VALUE && dist[u] + w < dist[v]) {
+                dist[v] = dist[u] + w; updated = true;
+            }
+        }
+        if (!updated) break;  // ★ 提前终止
+    }
+    
+    // 第 n 次检测负环
+    for (int[] e : edges)
+        if (dist[e[0]] + e[2] < dist[e[1]]) return null;  // 负环
+    return dist;
+}
+```
+
+### 24.3 Prim — 最小生成树 O(E log V)
+
+```java
+public int prim(List<int[]>[] graph, int n) {
+    boolean[] visited = new boolean[n];
+    PriorityQueue<int[]> pq = new PriorityQueue<>((a, b) -> a[1] - b[1]);
+    pq.offer(new int[]{0, 0});  // {节点, 边权}
+    int total = 0, count = 0;
+    
+    while (!pq.isEmpty() && count < n) {
+        int[] cur = pq.poll();
+        if (visited[cur[0]]) continue;
+        visited[cur[0]] = true; total += cur[1]; count++;
+        for (int[] e : graph[cur[0]])
+            if (!visited[e[0]]) pq.offer(e);
+    }
+    return total;
+}
+```
+
+### 24.4 Tarjan — 强连通分量 SCC
+
+```java
+public List<List<Integer>> tarjanSCC(List<Integer>[] graph, int n) {
+    int[] dfn = new int[n], low = new int[n];
+    boolean[] inStack = new boolean[n];
+    Arrays.fill(dfn, -1);
+    Deque<Integer> stack = new ArrayDeque<>();
+    List<List<Integer>> scc = new ArrayList<>();
+    int[] time = {0};
+    
+    for (int i = 0; i < n; i++)
+        if (dfn[i] == -1) tarjan(i, graph, dfn, low, inStack, stack, scc, time);
+    return scc;
+}
+
+private void tarjan(int u, List<Integer>[] g, int[] dfn, int[] low,
+        boolean[] inStack, Deque<Integer> stack, List<List<Integer>> scc, int[] time) {
+    dfn[u] = low[u] = ++time[0];
+    stack.push(u); inStack[u] = true;
+    
+    for (int v : g[u]) {
+        if (dfn[v] == -1) {
+            tarjan(v, g, dfn, low, inStack, stack, scc, time);
+            low[u] = Math.min(low[u], low[v]);
+        } else if (inStack[v]) {
+            low[u] = Math.min(low[u], dfn[v]);
+        }
+    }
+    
+    if (dfn[u] == low[u]) {  // u 是 SCC 的根
+        List<Integer> comp = new ArrayList<>();
+        int v;
+        do {
+            v = stack.pop(); inStack[v] = false;
+            comp.add(v);
+        } while (v != u);
+        scc.add(comp);
+    }
+}
+```
+
+### 24.5 网络流 — Edmonds-Karp (BFS + 增广路)
+
+```java
+public int maxFlow(int n, int[][] capacity, int s, int t) {
+    int[][] resid = new int[n][n];
+    for (int[] e : capacity) resid[e[0]][e[1]] = e[2];
+    
+    int flow = 0;
+    int[] parent = new int[n];
+    
+    while (bfs(resid, s, t, parent)) {  // ★ BFS 找增广路
+        int pathFlow = Integer.MAX_VALUE;
+        for (int v = t; v != s; v = parent[v])
+            pathFlow = Math.min(pathFlow, resid[parent[v]][v]);
+        
+        for (int v = t; v != s; v = parent[v]) {
+            resid[parent[v]][v] -= pathFlow;
+            resid[v][parent[v]] += pathFlow;
+        }
+        flow += pathFlow;
+    }
+    return flow;
+}
+
+private boolean bfs(int[][] resid, int s, int t, int[] parent) {
+    Arrays.fill(parent, -1); parent[s] = s;
+    Queue<Integer> q = new LinkedList<>(); q.offer(s);
+    while (!q.isEmpty()) {
+        int u = q.poll();
+        for (int v = 0; v < resid.length; v++) {
+            if (parent[v] == -1 && resid[u][v] > 0) {
+                parent[v] = u;
+                if (v == t) return true;
+                q.offer(v);
+            }
+        }
+    }
+    return false;
+}
+```
+
+---
+
+## 25. 博弈论基础
+
+```java
+// ★ Nim 游戏: 异或和 ≠ 0 → 先手必胜
+public boolean canWinNim(int[] piles) {
+    int xor = 0;
+    for (int p : piles) xor ^= p;
+    return xor != 0;
+}
+
+// ★ 石子游戏 — Minimax + Memo
+public boolean stoneGame(int[] piles) {
+    int n = piles.length;
+    int[][] dp = new int[n][n];
+    for (int i = 0; i < n; i++) dp[i][i] = piles[i];
+    
+    for (int len = 2; len <= n; len++) {
+        for (int i = 0; i + len - 1 < n; i++) {
+            int j = i + len - 1;
+            dp[i][j] = Math.max(piles[i] - dp[i+1][j],
+                                piles[j] - dp[i][j-1]);
+        }
+    }
+    return dp[0][n-1] > 0;
+}
+```
+
+---
+
+## 26. 前缀和与差分数组
+
+```java
+// ★ 前缀和: O(1) 区间求和
+class PrefixSum {
+    int[] pre;
+    public PrefixSum(int[] nums) {
+        pre = new int[nums.length + 1];
+        for (int i = 0; i < nums.length; i++)
+            pre[i + 1] = pre[i] + nums[i];
+    }
+    public int rangeSum(int l, int r) { return pre[r + 1] - pre[l]; }
+}
+
+// ★ 差分数组: O(1) 区间增减
+class Difference {
+    int[] diff;
+    public Difference(int[] nums) {
+        diff = new int[nums.length];
+        diff[0] = nums[0];
+        for (int i = 1; i < nums.length; i++)
+            diff[i] = nums[i] - nums[i - 1];
+    }
+    public void increment(int l, int r, int val) {
+        diff[l] += val;
+        if (r + 1 < diff.length) diff[r + 1] -= val;
+    }
+    public int[] result() {
+        int[] res = new int[diff.length];
+        res[0] = diff[0];
+        for (int i = 1; i < diff.length; i++) res[i] = res[i-1] + diff[i];
+        return res;
+    }
+}
+
+// ★ 二维前缀和
+class PrefixSum2D {
+    int[][] pre;
+    public PrefixSum2D(int[][] matrix) {
+        int m = matrix.length, n = matrix[0].length;
+        pre = new int[m + 1][n + 1];
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < n; j++)
+                pre[i+1][j+1] = pre[i][j+1] + pre[i+1][j] - pre[i][j] + matrix[i][j];
+    }
+    public int sumRegion(int r1, int c1, int r2, int c2) {
+        return pre[r2+1][c2+1] - pre[r1][c2+1] - pre[r2+1][c1] + pre[r1][c1];
+    }
+}
+```
+
+---
+
+## 27. 单调栈应用大全
+
+```java
+// ★ 接雨水 (Trapping Rain Water) — 单调栈
+public int trap(int[] height) {
+    Deque<Integer> stack = new ArrayDeque<>();
+    int water = 0;
+    for (int i = 0; i < height.length; i++) {
+        while (!stack.isEmpty() && height[i] > height[stack.peek()]) {
+            int top = stack.pop();
+            if (stack.isEmpty()) break;
+            int w = i - stack.peek() - 1;
+            int h = Math.min(height[i], height[stack.peek()]) - height[top];
+            water += w * h;
+        }
+        stack.push(i);
+    }
+    return water;
+}
+
+// ★ 柱状图中最大矩形 — 单调栈
+public int largestRectangleArea(int[] heights) {
+    Deque<Integer> stack = new ArrayDeque<>();
+    int maxArea = 0;
+    
+    for (int i = 0; i <= heights.length; i++) {
+        int h = (i == heights.length) ? 0 : heights[i];
+        while (!stack.isEmpty() && h < heights[stack.peek()]) {
+            int height = heights[stack.pop()];
+            int width = stack.isEmpty() ? i : i - stack.peek() - 1;
+            maxArea = Math.max(maxArea, height * width);
+        }
+        stack.push(i);
+    }
+    return maxArea;
+}
+
+// ★ 每日温度 — 单调栈经典
+public int[] dailyTemperatures(int[] temperatures) {
+    int[] res = new int[temperatures.length];
+    Deque<Integer> stack = new ArrayDeque<>();
+    for (int i = 0; i < temperatures.length; i++) {
+        while (!stack.isEmpty() && temperatures[i] > temperatures[stack.peek()]) {
+            int prev = stack.pop();
+            res[prev] = i - prev;
+        }
+        stack.push(i);
+    }
+    return res;
+}
+```
+
+---
+
+## 28. 矩阵快速幂 DP
+
+```java
+// ★ 斐波那契 O(log n) — 矩阵快速幂
+// [F(n)  ] = [1 1]^(n-1) × [F(1)]
+// [F(n-1)]   [1 0]        [F(0)]
+
+public long fibMatrix(long n) {
+    if (n <= 1) return n;
+    long[][] base = {{1, 1}, {1, 0}};
+    long[][] res = matrixPow(base, n - 1);
+    return res[0][0];
+}
+
+private long[][] matrixPow(long[][] a, long n) {
+    long[][] res = {{1, 0}, {0, 1}};  // 单位矩阵
+    while (n > 0) {
+        if ((n & 1) == 1) res = multiply(res, a);
+        a = multiply(a, a);
+        n >>= 1;
+    }
+    return res;
+}
+
+private long[][] multiply(long[][] a, long[][] b) {
+    long[][] c = new long[2][2];
+    c[0][0] = a[0][0]*b[0][0] + a[0][1]*b[1][0];
+    c[0][1] = a[0][0]*b[0][1] + a[0][1]*b[1][1];
+    c[1][0] = a[1][0]*b[0][0] + a[1][1]*b[1][0];
+    c[1][1] = a[1][0]*b[0][1] + a[1][1]*b[1][1];
+    return c;
+}
+```
+
+---
+
+## 29. 蓄水池抽样
+
+```java
+// ★ 从数据流中随机选 k 个元素 (不知道总数)
+class ReservoirSampling {
+    private Random rand = new Random();
+    
+    public int[] sample(int[] stream, int k) {
+        int[] reservoir = new int[k];
+        // 1. 前 k 个直接放入
+        for (int i = 0; i < k; i++) reservoir[i] = stream[i];
+        // 2. 第 i 个以 k/i 的概率替换
+        for (int i = k; i < stream.length; i++) {
+            int j = rand.nextInt(i + 1);
+            if (j < k) reservoir[j] = stream[i];
+        }
+        return reservoir;
+    }
+}
+
+// ★ Boyer-Moore 多数投票 — 找 > n/2 的元素 O(n) O(1)
+public int majorityElement(int[] nums) {
+    int candidate = 0, count = 0;
+    for (int num : nums) {
+        if (count == 0) candidate = num;
+        count += (num == candidate) ? 1 : -1;
+    }
+    return candidate;
+}
+```
+
+---
+
+## 30. Flood Fill 与扫线算法
+
+```java
+// ★ 岛屿数量 — DFS Flood Fill
+public int numIslands(char[][] grid) {
+    int count = 0;
+    for (int i = 0; i < grid.length; i++) {
+        for (int j = 0; j < grid[0].length; j++) {
+            if (grid[i][j] == '1') { dfs(grid, i, j); count++; }
+        }
+    }
+    return count;
+}
+
+private void dfs(char[][] grid, int i, int j) {
+    if (i < 0 || i >= grid.length || j < 0 || j >= grid[0].length || grid[i][j] == '0')
+        return;
+    grid[i][j] = '0';
+    dfs(grid, i+1, j); dfs(grid, i-1, j);
+    dfs(grid, i, j+1); dfs(grid, i, j-1);
+}
+
+// ★ 扫线算法 — 会议室 II (最多同时进行的会议)
+public int minMeetingRooms(int[][] intervals) {
+    int n = intervals.length;
+    int[] starts = new int[n], ends = new int[n];
+    for (int i = 0; i < n; i++) { starts[i] = intervals[i][0]; ends[i] = intervals[i][1]; }
+    Arrays.sort(starts); Arrays.sort(ends);
+    
+    int rooms = 0, endIdx = 0;
+    for (int start : starts) {
+        if (start < ends[endIdx]) rooms++;
+        else endIdx++;
+    }
+    return rooms;
+}
+```
+
+---
+
+## 31. Z 算法 — 线性字符串匹配
+
+```java
+// ★ Z 数组: z[i] = s[0:] 与 s[i:] 的最长公共前缀长度
+//   匹配: concat = pattern + "$" + text, 找 z[i] == len(pattern)
+public int[] computeZ(String s) {
+    int n = s.length();
+    int[] z = new int[n];
+    int l = 0, r = 0;
+    
+    for (int i = 1; i < n; i++) {
+        if (i <= r) z[i] = Math.min(r - i + 1, z[i - l]);
+        while (i + z[i] < n && s.charAt(z[i]) == s.charAt(i + z[i]))
+            z[i]++;
+        if (i + z[i] - 1 > r) { l = i; r = i + z[i] - 1; }
+    }
+    return z;
+}
+```
+
+---
+
+## 32. 状态压缩 DP
+
+```java
+// ★ 旅行商问题 TSP — 状态压缩 DP O(n²·2ⁿ)
+public int tsp(int[][] dist) {
+    int n = dist.length;
+    int[][] dp = new int[1 << n][n];  // dp[mask][i] = 访问过 mask, 当前在 i 的最短路径
+    for (int[] row : dp) Arrays.fill(row, Integer.MAX_VALUE / 2);
+    dp[1][0] = 0;  // 从城市 0 出发
+    
+    for (int mask = 1; mask < (1 << n); mask++) {
+        for (int i = 0; i < n; i++) {
+            if ((mask & (1 << i)) == 0) continue;
+            for (int j = 0; j < n; j++) {
+                if ((mask & (1 << j)) != 0) continue;
+                dp[mask | (1 << j)][j] = Math.min(dp[mask | (1 << j)][j],
+                                                   dp[mask][i] + dist[i][j]);
+            }
+        }
+    }
+    
+    int ans = Integer.MAX_VALUE;
+    for (int i = 1; i < n; i++) ans = Math.min(ans, dp[(1 << n) - 1][i] + dist[i][0]);
+    return ans;
+}
+```
+
+---
+
+## 33. 红黑树核心操作
+
+```java
+// ★ 红黑树五大性质:
+// 1. 节点红或黑  2. 根黑  3. 叶(NIL)黑
+// 4. 红节点的子节点必黑  5. 任一路径黑节点数相同
+
+enum Color { RED, BLACK }
+
+class RBNode {
+    int val; Color color = Color.RED;
+    RBNode left, right, parent;
+    RBNode(int val) { this.val = val; }
+}
+```
+
+**旋转与插入修正**：
+
+| 场景 | 操作 |
+|------|------|
+| 叔叔红 | 父叔变黑，祖父变红，祖父成为新节点 |
+| 叔叔黑 (LL) | 右旋祖父 |
+| 叔叔黑 (LR) | 左旋父 → 变为 LL |
+| 叔叔黑 (RL) | 右旋父 → 变为 RR |
+| 叔叔黑 (RR) | 左旋祖父 |
+
+---
+
+## 34. 素数筛与快速幂
+
+```java
+// ★ 埃氏筛 O(n log log n)
+public boolean[] sieveOfEratosthenes(int n) {
+    boolean[] isPrime = new boolean[n + 1];
+    Arrays.fill(isPrime, true); isPrime[0] = isPrime[1] = false;
+    for (int i = 2; i * i <= n; i++)
+        if (isPrime[i])
+            for (int j = i * i; j <= n; j += i) isPrime[j] = false;
+    return isPrime;
+}
+
+// ★ 欧拉筛 / 线性筛 O(n)
+public List<Integer> eulerSieve(int n) {
+    boolean[] isComposite = new boolean[n + 1];
+    List<Integer> primes = new ArrayList<>();
+    for (int i = 2; i <= n; i++) {
+        if (!isComposite[i]) primes.add(i);
+        for (int p : primes) {
+            if (i * p > n) break;
+            isComposite[i * p] = true;
+            if (i % p == 0) break;  // ★ 每个合数只被最小质因数筛一次
+        }
+    }
+    return primes;
+}
+```
+
+---
+
+## 35. 数据结构选型速查
+
+| 需求 | 选型 | 复杂度 |
+|------|------|--------|
+| 快速查找 | HashMap / HashSet | O(1) |
+| 有序、范围查询 | **TreeMap 红黑树** | O(log n) |
+| 最大/最小值 | **堆 PriorityQueue** | O(log n) |
+| 前缀匹配 | **Trie** | O(k) |
+| 连通性 | **并查集** | O(α(n)) |
+| 区间求和/更新 | **树状数组/线段树** | O(log n) |
+| 排名/第K大 | **跳表** / 线段树 | O(log n) |
+| 去重+判存在 | **布隆过滤器** | O(k), 可能误判 |
+| LRU/LFU | **LinkedHashMap** / 双链表+哈希 | O(1) |
+| 数据流中位数 | **双堆** | O(log n) |
+
+---
+
+*全文 35 章 Java 版，从初级到高级，30+ 数据结构，100+ 核心算法。*
+
