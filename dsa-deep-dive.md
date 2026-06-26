@@ -235,6 +235,23 @@ public boolean isValid(String s) {
 
 ### 4.2 单调栈 — 每日温度
 
+```mermaid
+flowchart TB
+    subgraph INPUT["输入: 73,74,75,71,69,72,76,73"]
+        I["要找每个元素右边第一个比它大的"]
+    end
+    subgraph STACK["单调递减栈(存索引)"]
+        S1["i=0:73 → 栈[0]"]
+        S2["i=1:74>栈顶73 → pop→res[0]=1, push 1"]
+        S3["i=2:75>栈顶74 → pop→res[1]=1, push 2"]
+        S4["i=3:71<栈顶75 → push 3"]
+        S5["i=4:69<栈顶71 → push 4"]
+        S6["i=5:72>栈顶69 → pop→res[4]=1<br/>72>栈顶71 → pop→res[3]=2, push 5"]
+        S7["i=6:76>栈顶72→pop→res[5]=1<br/>76>栈顶75→pop→res[2]=4, push 6"]
+    end
+    INPUT --> STACK
+```
+
 ```
 temperatures = [73,74,75,71,69,72,76,73]
 
@@ -297,6 +314,18 @@ public int trap(int[] height) {
 
 ### 5.1 HashMap 索引计算
 
+```mermaid
+flowchart TB
+    subgraph PUT["put(key,value)"]
+        P1["计算 hash(key)"] --> P2["(n-1) & hash → index"]
+        P2 --> P3{"桶[i]为空?"}
+        P3 -->|"是"| P4["直接放入"]
+        P3 -->|"否<br/>冲突!"| P5{"桶是链表?"}
+        P5 -->|"≤8个节点"| P6["遍历链表<br/>key相同→覆盖<br/>否则→追加到末尾"]
+        P5 -->|">8个节点<br/>且table≥64"| P7["★ 转红黑树"]
+    end
+```
+
 ```
 table.length = 16 (一定是 2 的幂)
 
@@ -341,6 +370,22 @@ public List<List<String>> groupAnagrams(String[] strs) {
 ## 6. 二分查找
 
 ### 6.1 三种变体
+
+```mermaid
+flowchart TB
+    subgraph ARR["nums=[1,2,2,2,3,4], target=2"]
+        A["索引: 0  1  2  3  4  5"]
+        B["值:  [1, 2, 2, 2, 3, 4]"]
+        C["       ↑L     ↑R"]
+        D["L=lowerBound=1 (第一个≥2)"]
+        E["R=upperBound=4 (第一个>2)"]
+    end
+    subgraph CODE["三种变体区别"]
+        F["binarySearch: nums[mid]==t → return"]
+        G["lowerBound:  nums[mid]>=t → hi=mid"]
+        H["upperBound:  nums[mid]>t  → hi=mid"]
+    end
+```
 
 ```
 nums = [1,2,2,2,3,4], target=2
@@ -400,6 +445,18 @@ public int searchRotated(int[] nums, int target) {
 
 ## 7. 排序算法
 
+
+```mermaid
+flowchart TB
+    subgraph PARTITION["Lomuto分区: pivot=6"]
+        P1["[3,1,4,1,5,9,2 | 6]"] --> P2["i=0: 3<6 → swap(0,0)"]
+        P2 --> P3["遍历完毕 → swap(i,hi)"]
+        P3 --> P4["★ [3,1,4,1,5,2 | 6 | 9]"]
+    end
+    subgraph RECURSE["递归左右"]
+        R1["左: [3,1,4,1,5,2]"] & R2["右: [9]"]
+    end
+```
 ### 7.1 快排 + Quick Select
 
 ```java
@@ -492,6 +549,20 @@ public List<Integer> inorder(TreeNode root) {
 }
 ```
 
+
+```mermaid
+flowchart TB
+    subgraph BST["验证BST: 每个节点有上下界"]
+        N5["5"] --> N3["3(upper=5)"] & N8["8(lower=5)"]
+        N3 --> N1["1(upper=3)"] & N4["4(lower=3,upper=5)"]
+        N8 --> N7["7(lower=5,upper=8)"]
+    end
+    subgraph LCA["LCA(4,7)=5"]
+        L["查左右子树"] --> LL["左:找到4"] & LR["右:找到7"]
+        LL --> ANS["左右都不空 → 当前5即LCA"]
+        LR --> ANS
+    end
+```
 ### 8.2 验证 BST + 前中序构建树 + LCA
 
 ```java
@@ -586,6 +657,19 @@ private void backtrack(List<List<Integer>> res, List<Integer> path, int[] nums, 
 }
 ```
 
+
+```mermaid
+flowchart TB
+    subgraph SUBSET["子集决策树 nums=[1,2,3]"]
+        S0["[]"] --> S1["[1]"] & S2["[2]"] & S3["[3]"]
+        S1 --> S11["[1,2]"] & S12["[1,3]"]
+        S11 --> S111["[1,2,3]✅"]
+    end
+    subgraph NQ["4皇后棋盘"]
+        Q1["行0:尝试col0"] --> Q2["行1:跳过col0,col1→选col2"]
+        Q2 --> Q3["行2:跳过col0→选col1→失败<br/>★回溯:换行0col"]
+    end
+```
 ### 9.2 子集 + 组合总和 + N 皇后
 
 ```java
@@ -664,6 +748,19 @@ public int knapsack(int[] w, int[] v, int cap) {
 }
 ```
 
+
+```mermaid
+flowchart TB
+    subgraph LIS["纸牌堆算法: nums=[3,5,6,2,5,4,19,5,6,7,8,2,7,8]"]
+        P1["堆1: 3,2,2"]
+        P2["堆2: 5,5,4"]
+        P3["堆3: 6,5,5"]
+        P4["堆4: 19,6,6"]
+        P5["堆5: 7,7"]
+        P6["堆6: 8,8"]
+        ANS["★ LIS长度=堆数=6"]
+    end
+```
 ### 10.2 最长递增子序列 (O(n log n))
 
 ```java
@@ -680,6 +777,16 @@ public int lengthOfLIS(int[] nums) {
 }
 ```
 
+
+```mermaid
+flowchart TB
+    subgraph EDIT["编辑距离: horse → ros"]
+        TBL["dp表格"]
+        H0["horse→rose(h→r)"]
+        H1["rose→ros(删e)"]
+        ANS["★ dp[5][3]=3"]
+    end
+```
 ### 10.3 编辑距离 + LCS
 
 ```java
@@ -711,6 +818,17 @@ public int longestCommonSubsequence(String a, String b) {
 ---
 
 ## 11. 贪心算法
+
+```mermaid
+flowchart TB
+    subgraph JUMP["跳跃游戏: [2,3,1,1,4]"]
+        J1["i=0: maxReach=2"] --> J2["i=1: maxReach=max(2,4)=4"]
+        J2 --> J3["i=4≤4 ✅ 可达"]
+    end
+    subgraph INTERVAL["区间调度"]
+        IV["按结束时间排序"] --> G1["贪心选最早结束且不重叠"]
+    end
+```
 
 ```java
 // 跳跃游戏
@@ -836,6 +954,22 @@ private void dfs(char[][] g, int i, int j) {
 }
 ```
 
+
+```mermaid
+flowchart TB
+    subgraph GRAPH["S→B→T 最短路径"]
+        S["S(0)"] -->|"7"| A["A"]
+        S -->|"2"| B["B"]
+        A -->|"3"| T["T"]
+        B -->|"6"| A
+        B -->|"1"| T
+    end
+    subgraph STEPS["Dijkstra步骤"]
+        ST1["选S:0 →更新 A=7,B=2"]
+        ST2["选B:2 →更新 T=2+1=3✅"]
+        ST3["★ 最短: S→B→T=3"]
+    end
+```
 ### 13.3 Dijkstra
 
 ```java
@@ -963,6 +1097,14 @@ class SegTree {
 }
 ```
 
+
+```mermaid
+flowchart TB
+    subgraph LRU["LRU: HashMap + 双向链表"]
+        MAP["HashMap<key,Node>"] --> NODE["head↔[k1,v1]↔[k2,v2]↔[k3,v3]↔tail"]
+        NOTE["get(k2)→把[k2,v2]移到head后<br/>put(k4)→满了→删tail前→head后插入"]
+    end
+```
 ### 14.5 LRU / LFU
 
 ```java
@@ -978,6 +1120,21 @@ class LRUCache extends LinkedHashMap<Integer,Integer> {
 ---
 
 ## 15. 字符串算法
+
+```mermaid
+flowchart TB
+    subgraph KMP["KMP: next数组构建"]
+        P1["pattern='ababc'"] --> P2["i=2:'aba'→前后缀'a'=1"]
+        P2 --> P3["i=3:'abab'→前后缀'ab'=2"]
+        P3 --> P4["next=[0,0,1,2,0]"]
+    end
+    subgraph MATCH["匹配过程"]
+        M1["text:abababc→匹配到i=4失败"] --> M2["j=next[3]=2→跳到p[2]='a'继续"]
+    end
+    subgraph RK["Rabin-Karp滚动哈希"]
+        H1["hash('abc')=a×256²+b×256+c"] --> H2["hash('bcd')=(old-a×256²)×256+d"]
+    end
+```
 
 ```java
 // KMP
