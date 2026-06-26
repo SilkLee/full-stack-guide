@@ -1681,5 +1681,426 @@ public List<Integer> eulerSieve(int n) {
 
 ---
 
-*全文 35 章 Java 版，从初级到高级，30+ 数据结构，100+ 核心算法。*
+# 算法在 Spring 全家桶中的应用全景
+
+> **最高效的学习方式**：不在白板上背模板，去 Spring 源码里看它怎么用。
+
+## 36. HashMap → Spring IoC 容器
+
+**Spring 落地**：`DefaultSingletonBeanRegistry` 的三级缓存，是 HashMap 在高并发场景的经典应用。
+
+```java
+// DefaultSingletonBeanRegistry.java
+public class DefaultSingletonBeanRegistry {
+    // ★ L1: 完全初始化的单例 → ConcurrentHashMap (线程安全 HashMap)
+    private final Map<String, Object> singletonObjects = new ConcurrentHashMap<>(256);
+
+    // ★ L2: 提前暴露的早期引用
+    private final Map<String, Object> earlySingletonObjects = new ConcurrentHashMap<>(16);
+
+    // ★ L3: 对象工厂 (延迟创建, 解决循环依赖)
+    private final Map<String, ObjectFactory<?>> singletonFactories = new HashMap<>(16);
+}
+```
+
+**为什么选 HashMap 而不是数组？**
+
+| 数组 | HashMap |
+|------|---------|
+| `getBean("userService")` — O(n) 遍历 | **O(1)** 直接定位 |
+| 1000 个 Bean 平均找 500 次 | **1 次命中的概率 > 99%** |
+
+---
+
+## 37. ArrayList → Bean 定义注册 + 拦截器链
+
+**Spring 落地**：`DefaultListableBeanFactory.beanDefinitionNames`
+
+```java
+// DefaultListableBeanFactory.java
+// ★ 按注册顺序保存 beanName, 保证依赖注入顺序
+private volatile List<String> beanDefinitionNames = new ArrayList<>(256);
+
+// 为什么用 ArrayList 而不是 HashSet?
+// HashSet 无序 → 依赖注入顺序随机 → Spring 启动每次都不同 → 不可复现 Bug
+// ArrayList 保持注册顺序 → 依赖注入可预测
+```
+
+**拦截器链**也是 ArrayList：
+
+```java
+// HandlerExecutionChain.java
+private final List<HandlerInterceptor> interceptors = new ArrayList<>();
+// preHandle → 按注册顺序执行
+for (int i = 0; i < this.interceptors.size(); i++) {
+    if (!this.interceptors.get(i).preHandle(request, response, handler))
+        return false;  // ★ 任何一个返回 false 就中断链
+}
+```
+
+---
+
+## 38. LinkedList → AOP 拦截器链
+
+**Spring 落地**：`ReflectiveMethodInvocation` 的拦截器链，需要**频繁在首部取出下一个拦截器**。
+
+```java
+// ReflectiveMethodInvocation.java — 责任链模式
+// ★ 为什么不用 ArrayList? 因为只从头部取, LinkedList.removeFirst() 是 O(1)
+//    ArrayList.remove(0) 是 O(n) — 每次移除头部都要搬移整个数组!
+
+private int currentInterceptorIndex = -1;
+
+public Object proceed() {
+    // ★ 每次去链上取下一条, 等价于 LinkedList 遍历
+    if (this.currentInterceptorIndex == this.interceptors.size() - 1)
+        return invokeJoinpoint();       // 到链尾 → 执行目标方法
+    
+    Object interceptor = this.interceptors.get(++this.currentInterceptorIndex);
+    return ((MethodInterceptor) interceptor).invoke(this);
+}
+```
+
+---
+
+## 39. Stack (Deque) → Security 过滤器链
+
+**Spring 落地**：`FilterChainProxy` 内部用 `Deque` 管理过滤器调用栈。
+
+```java
+// FilterChainProxy.java — Spring Security
+// ★ 为什么不用递归? 栈深度不可控, 100 个 Filter 递归会 StackOverflow
+//    Deque 模拟调用栈: 每次取下一个 Filter, 执行完回来继续
+
+private void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) {
+    List<Filter> filters = getFilters(request);
+    // 用 iterator 或 Deque 逐个取出 Filter 执行
+    VirtualFilterChain vfc = new VirtualFilterChain(request, chain, filters);
+    vfc.doFilter(request, response);
+}
+```
+
+---
+
+## 40. PriorityQueue (堆) → TaskScheduler
+
+**Spring 落地**：`ThreadPoolTaskScheduler` 的任务调度，用小顶堆管理"最近要执行的任务"。
+
+```java
+// ScheduledThreadPoolExecutor — 底层是 DelayedWorkQueue (基于堆)
+// ★ 为什么用堆? Top 1 = 最近要执行的任务, O(1) 取出
+//    插入新任务 O(log n), 比每次全量排序快
+
+// Spring 的 @Scheduled 注解 → TaskScheduler → ScheduledThreadPoolExecutor → 堆
+@Scheduled(fixedDelay = 5000)
+public void cleanCache() { /* ... */ }
+```
+
+---
+
+## 41. TreeMap (红黑树) → PropertySource 排序
+
+**Spring 落地**：`@Order` 注解的排序、`@AutoConfigureOrder` 自动配置排序。
+
+```java
+// AnnotationAwareOrderComparator — 对所有 @Order 注解排序
+// ★ 底层 TreeMap 保证 @Order(1) 在 @Order(10) 之前加载
+
+@Configuration
+@Order(1)  // ★ 这个配置先加载
+public class SecurityConfig { }
+
+@Configuration
+@Order(10)  // 这个后加载
+public class WebConfig { }
+```
+
+---
+
+## 42. Trie 前缀树 → AntPathMatcher URL 匹配
+
+**Spring 落地**：不是用 Trie，但思想一致——`AntPathMatcher` 把 `/users/**/orders` 拆成 token 数组逐段匹配。
+
+```java
+// AntPathMatcher.java
+// URL: /api/users/123/orders
+// 匹配模式: /api/users/**orders
+// → 拆成 ["api", "users", "**", "orders"]
+// → 逐 token 匹配, ** 匹配零或多个路径段
+
+// ★ 这本质是 Trie 的变体:
+//   每个 "/" 分隔的路径段 = Trie 的一层节点
+//   ** = Trie 中"跳过任意层"的通配符
+```
+
+---
+
+## 43. 图论 — 拓扑排序 → Bean 初始化顺序
+
+**Spring 落地**：`@DependsOn` 和 `@AutoConfigureAfter/Before` 的依赖排序。
+
+```java
+// Spring 内部对 Bean 初始化顺序的排序就是拓扑排序
+// A dependsOn [B, C] → 有向边 B→A, C→A → 生成拓扑序 [B, C, A]
+// 
+// 算法: Kahn BFS
+//   1. 计算所有 Bean 的入度 (被多少 Bean 依赖)
+//   2. 入度为 0 的 Bean 入队
+//   3. 逐个出队, 将其依赖的 Bean 的入度 -1
+//   4. 入度变为 0 的 Bean 继续入队
+
+// ★ 如果有环 → 无法生成拓扑序 → BeanCurrentlyInCreationException!
+```
+
+---
+
+## 44. DFS → ClassPath 组件扫描
+
+**Spring 落地**：`ClassPathBeanDefinitionScanner` 扫描包下的所有 `.class` 文件。
+
+```java
+// ClassPathBeanDefinitionScanner.java
+// ★ 包扫描本质是 DFS 遍历文件系统:
+//   com.example → com.example.service → com.example.service.impl
+//               → com.example.controller
+
+// 伪代码:
+void scan(String basePackage) {
+    for (File f : listFiles(basePackage)) {
+        if (f.isDirectory()) scan(f);        // ★ DFS 递归
+        else if (f.endsWith(".class")) register(f);  // 注册 BeanDefinition
+    }
+}
+```
+
+---
+
+## 45. 二分查找 → PropertyResolver 属性解析
+
+**Spring 落地**：`PropertySourcesPropertyResolver` 解析嵌套属性 key。
+
+```java
+// PropertySourcesPropertyResolver.java
+// ★ 属性名按优先级排序后, 用二分查找定位
+//   "spring.datasource.url" → 在排序后的 PropertySource 列表中二分定位
+//   比线性扫描 O(n) 快一个数量级
+```
+
+---
+
+## 46. 滑动窗口 (Sliding Window) → 限流算法
+
+**Spring 落地**：`RateLimiter`（Spring Cloud Gateway / Resilience4j）。
+
+```java
+// 固定窗口: 每秒最多 100 个请求
+// ★ 滑动窗口: 每个请求过来, 先清除窗口外的过期请求, 然后计数
+//   比固定窗口更平滑, 不会出现窗口边界的"突刺"
+
+// RequestRateLimiter GatewayFilter — Spring Cloud Gateway
+filters:
+  - name: RequestRateLimiter
+    args:
+      redis-rate-limiter.replenishRate: 100   # 每秒允许 100 个
+      redis-rate-limiter.burstCapacity: 200    # 突发容量 200
+```
+
+---
+
+## 47. LRU (LinkedHashMap) → Spring Cache
+
+**Spring 落地**：`ConcurrentMapCache` 底层是 `ConcurrentHashMap`，不是 LRU。但 Spring Cache 的 `CaffeineCache` 用 **W-TinyLFU**（LRU 的进化版）。
+
+```java
+// Caffeine Cache — Spring Boot 默认本地缓存
+// ★ W-TinyLFU = Window + LFU 变体, 比纯 LRU 更精准
+//   原理: 维护一个"最近访问窗口" + "频率计数器"
+//   驱逐时优先淘汰低频 + 不常用的
+
+// 使用:
+@Cacheable(value = "users", key = "#id")
+public User getUser(Long id) { return userRepo.findById(id); }
+```
+
+---
+
+## 48. 位图 BitSet → @Conditional 条件标记
+
+**Spring 落地**：`@Conditional` 注解的条件评估结果用位图存储。
+
+```java
+// ConditionEvaluator.java
+// ★ 每个 @Conditional 的评估结果 (true/false) 用一个 bit 表示
+//    200 个自动配置类的条件, 用 200 bit = 25 bytes 存储
+//    比 Map<String, Boolean> 省 ~100 倍内存
+
+// BitSet 的应用:
+// - 跟踪哪些 Condition 已评估 → BitSet.get(i) O(1)
+// - 快速判断是否所有条件都满足 → BitSet.cardinality() == total
+```
+
+---
+
+## 49. 动态规划 → @Transactional 传播行为
+
+**Spring 落地**：`TransactionSynchronizationManager` 的事务传播决策是状态机 DP。
+
+```java
+// ★ @Transactional 的 7 种传播行为, 每种都是"当前状态 + 传播类型 → 新状态"
+//   可以建模为 DP 状态转移:
+
+// DP 状态: {无事务, 有事务A, 有事务B(NEW), 有嵌套事务}
+// 转移:
+//   REQUIRED:     无事务→创建  | 有事务→加入
+//   REQUIRES_NEW: 无事务→创建  | 有事务→挂起当前, 创建新事务
+//   NESTED:       无事务→创建  | 有事务→创建 Savepoint
+
+// ★ 底层实现:
+// TransactionSynchronizationManager 用 ThreadLocal 存储当前状态
+// getTransaction() → 根据传播类型决定是否新建/挂起
+```
+
+---
+
+## 50. 哈希函数 — 一致性 Hash → 分布式 Session
+
+**Spring 落地**：`Spring Session` + Redis 集群的 Session 路由。
+
+```java
+// ★ 一致性 Hash: 不是简单的 hash(key) % n
+//   而是 hash(key) 映射到环上的一个点, 顺时针找最近的 Node
+//   好处: 增减 Node 只影响相邻节点, 不需要重新分布所有数据
+
+// Spring Session Redis — 用 Redis 集群存储 Session
+// 内部 Redis Cluster 用哈希槽 (slot) 分布数据 — 本质上是一致性 Hash 的变体
+```
+
+---
+
+## 51. 贪心算法 → HTTP MessageConverter 选择
+
+**Spring 落地**：`AbstractMessageConverterMethodProcessor` 选择最佳 `HttpMessageConverter`。
+
+```java
+// ★ 贪心策略: 遍历 converter 列表, 选第一个能处理的
+for (HttpMessageConverter<?> converter : this.messageConverters) {
+    if (converter.canWrite(clazz, mediaType)) {
+        converter.write(body, mediaType, outputMessage);  // ★ 找到就返回
+        return;
+    }
+}
+// 为什么贪心可行? Converter 列表已经按"最通用→最特定"排好序
+```
+
+---
+
+## 52. 回溯算法 → BeanDefinition 合并
+
+**Spring 落地**：`AbstractBeanFactory.getMergedLocalBeanDefinition()`。
+
+```java
+// ★ Bean 定义可以继承 (parent 属性), 合并父子定义的过程就是回溯:
+//   1. 当前 Bean 有定义 → 用当前的
+//   2. 当前没有 → 查 parent 的定义
+//   3. parent 也没有 → 查 parent 的 parent
+//   4. ... → 直到 RootBeanDefinition
+
+// RootBeanDefinition merged = new RootBeanDefinition(parentDef);
+// merged.overrideFrom(childDef);  // 子覆盖父
+// ★ 本质: 沿继承链回溯, 找到所有属性来源
+```
+
+---
+
+## 53. 分治算法 → DispatcherServlet 请求分发
+
+**Spring 落地**：`DispatcherServlet.doDispatch()` 的请求分发。
+
+```java
+// ★ 分治三步骤在 doDispatch 中的体现:
+// 1. 分解: 获取 Handler (HandlerMapping 负责)
+HandlerExecutionChain handler = getHandler(request);
+
+// 2. 治理: 执行 Handler (HandlerAdapter 负责)
+HandlerAdapter ha = getHandlerAdapter(handler);
+ModelAndView mv = ha.handle(request, response, handler);
+
+// 3. 合并: 处理返回结果 (ViewResolver / HttpMessageConverter 负责)
+processDispatchResult(request, response, handler, mv);
+```
+
+---
+
+## 54. 双指针 → Spring AOP 代理执行
+
+**Spring 落地**：`ReflectiveMethodInvocation` 的拦截器索引递增是典型的双指针思想。
+
+```java
+// ★ currentInterceptorIndex 递增, 拦截器链不变
+//   left = 当前拦截器位置, right = 拦截器链末端
+//   当 left >= right → 所有拦截器执行完毕 → 执行目标方法
+
+private int currentInterceptorIndex = -1;
+
+public Object proceed() {
+    // left = ++currentInterceptorIndex
+    if (++this.currentInterceptorIndex == this.interceptors.size() - 1)
+        return invokeJoinpoint();  // left >= right → 到末尾
+
+    // 拦截器内部再次调用 proceed() → left 继续向右移动
+    return ((MethodInterceptor) interceptor).invoke(this);
+}
+```
+
+---
+
+## 55. 前缀和 — AOP 调用链耗时统计
+
+**Spring 落地**：每个 BeanPostProcessor 的耗时统计。
+
+```java
+// ★ 如果要统计每个 BeanPostProcessor 的耗时:
+//   方法1: 每个都计时 → O(n) 个 System.currentTimeMillis()
+//   方法2: 前缀和 → 记录每个 BP 的累计耗时, 任意区间 O(1) 查询
+
+long[] bppTimes = new long[bpps.length];  // 每个 BP 的耗时
+long[] prefixSum = new long[bpps.length + 1];
+for (int i = 0; i < bpps.length; i++)
+    prefixSum[i + 1] = prefixSum[i] + bppTimes[i];
+
+// ★ 查询第 3 到第 7 个 BP 的总耗时: O(1)
+long total = prefixSum[8] - prefixSum[3];
+```
+
+---
+
+## 全量速查表
+
+| 算法 / 数据结构 | Spring 落地位置 | 核心作用 |
+|----------------|---------------|----------|
+| **HashMap** | `DefaultSingletonBeanRegistry` 三级缓存 | Bean 查找 O(1) |
+| **ConcurrentHashMap** | `DefaultListableBeanFactory` | 线程安全 Bean 注册 |
+| **ArrayList** | `HandlerExecutionChain`、`BeanDefinitionNames` | 有序拦截器链 / 有序注入 |
+| **LinkedList** | AOP `ReflectiveMethodInvocation` | 责任链遍历 |
+| **Stack (Deque)** | `FilterChainProxy` | 安全过滤器链 |
+| **PriorityQueue** | `TaskScheduler`、`DelyedWorkQueue` | 定时任务调度 |
+| **TreeMap (红黑树)** | `AnnotationAwareOrderComparator` | `@Order` 注解排序 |
+| **LinkedHashMap** | `CaffeineCache` | LRU 缓存驱逐 |
+| **Trie** | `AntPathMatcher` | URL 模式匹配 |
+| **拓扑排序** | Bean 初始化顺序、`@DependsOn` | 依赖解析 |
+| **DFS** | `ClassPathBeanDefinitionScanner` | 包扫描 |
+| **二分查找** | `PropertyResolver` | 属性定位 |
+| **滑动窗口** | `RequestRateLimiter` | 限流 |
+| **位图 BitSet** | `ConditionEvaluator` | 条件评估状态 |
+| **一致性 Hash** | `Redis Cluster` 哈希槽 | 分布式 Session |
+| **贪心** | `HttpMessageConverter` 选择 | 最佳匹配 |
+| **回溯** | `getMergedLocalBeanDefinition` | Bean 定义合并 |
+| **分治** | `DispatcherServlet.doDispatch` | 请求处理 |
+| **双指针** | AOP 拦截器索引递增 | 链式调用 |
+| **前缀和** | BeanPostProcessor 耗时统计 | 区间查询 |
+
+---
+
+*全文 55 章 Java 版，从初级算法到 Spring 源码落地全景。*
+
 
