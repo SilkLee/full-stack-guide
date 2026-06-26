@@ -3995,30 +3995,510 @@ rewrite {
 19. MyBatis 插件为什么只能拦截 Executor/StatementHandler/ParameterHandler/ResultSetHandler 四种对象？
 20. MyBatis 一级缓存在 Spring 集成后每次查询都失效，为什么？如何解决？
 
-### 思考题参考答案（简要）
+### 思考题参考答案（详细）
 
-| # | 答案要点 |
-|---|----------|
-| 1 | `@Configuration` + `@EnableAutoConfiguration` + `@ComponentScan` |
-| 2 | 看 `ConditionEvaluationReport`，或启动时加 `--debug` |
-| 3 | `ClassUtils.isPresent("DispatcherServlet")` && `!isPresent("DispatcherHandler")` |
-| 4 | 堆栈包含 Bean 名 + 循环链 `A → B → A` |
-| 5 | `@ControllerAdvice` 优先级更高，先于局部 `@ExceptionHandler` |
-| 6 | NESTED 用 savepoint（JDBC），REQUIRES_NEW 挂起当前事务（物理连接不同） |
-| 7 | `@WebMvcTest` 通过 `@TypeExcludeFilters` 排除了 `@Service` `@Repository` |
-| 8 | 回滚时 AFTER_COMMIT 不触发，AFTER_COMPLETION 会触发（含 `AFTER_ROLLBACK`） |
-| 9 | 翻译为 `WHERE age > ? AND name LIKE ?`，支持 ~20 个关键词 |
-| 10 | 10 个依赖说明该类职责过重，应拆分为 3-4 个小 Service |
-| 11 | 不会！`@Scheduled` 依赖 `TaskScheduler` Bean，懒加载会导致未初始化 |
-| 12 | 缺少 JPA 依赖（`spring-boot-starter-data-jpa`），或 DataSource 不是 `javax.sql.DataSource` |
-| 13 | `FactoryBean` 是创建复杂 Bean 的工厂，`BeanFactory` 是整个 IoC 容器的根接口 |
-| 14 | 每次 `proceed()` 递增 `currentInterceptorIndex`，取出下一个拦截器，将 `this` 传给它，拦截器内部再次调用 `proceed()` 形成递归链 |
-| 15 | 通过 `getGenericInterfaces()` → `ParameterizedType.getActualTypeArguments()` |
-| 16 | 长轮询 30s 超时→重连，比短轮询省 97% 请求；短轮询 1s 一次 |
-| 17 | 关联：支付接口 QPS 过高时限流下单接口；热点：userId=999 限 100 QPS，其他不限 |
-| 18 | Gateway Filter 在请求到达 Controller 之前；MVC Interceptor 在 DispatcherServlet 内；不能互相替代 |
-| 19 | 因为这四种对象覆盖了 MyBatis 的完整 SQL 执行生命周期：参数处理→SQL 执行→结果映射→语句处理 |
-| 20 | `SqlSessionTemplate` 每次查询创建新 SqlSession；解决：手动开启二级缓存或将查询放在同一事务内 |
+#### Q1: 不使用 @SpringBootApplication 如何手动实现等价效果？
+
+```java
+// @SpringBootApplication 是三合一注解：
+//   @SpringBootConfiguration (= @Configuration)
+//   @EnableAutoConfiguration
+//   @ComponentScan
+
+// 等价手动写法：
+@Configuration
+@EnableAutoConfiguration
+@ComponentScan
+public class MyApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(MyApplication.class, args);
+    }
+}
+
+// 为什么需要三个？各自职责完全不同：
+// @Configuration     → 声明这是一个配置类（可定义 @Bean）
+// @EnableAutoConfiguration → 触发自动配置（核心！加载 spring.factories 中的配置类）
+// @ComponentScan     → 扫描当前包及子包的 @Component/@Service/@Controller
+```
+
+#### Q2: 如何排查自动配置未生效？
+
+```bash
+# 方法1: 启动参数 --debug
+java -jar app.jar --debug
+# 输出中搜索 "CONDITIONS EVALUATION REPORT"
+# Positive matches: 生效的配置
+# Negative matches: 未生效的配置（含未满足的条件）
+
+# 方法2: Actuator 端点
+GET /actuator/conditions
+# 返回 JSON: positiveMatches / negativeMatches / unconditionalClasses
+
+# 方法3: 代码打印
+@Bean
+public CommandLineRunner printConditions(ApplicationContext ctx) {
+    return args -> {
+        ConfigurableApplicationContext cac = (ConfigurableApplicationContext) ctx;
+        ConditionEvaluationReport report = ConditionEvaluationReport.get(cac.getBeanFactory());
+        report.getConditionAndOutcomesBySource().forEach((source, outcome) -> {
+            if (!outcome.isFullMatch()) {
+                System.out.println("NOT MATCHED: " + source);
+                outcome.getNotMatched().forEach(c -> 
+                    System.out.println("  因为: " + c.getCondition().getClass().getSimpleName()));
+            }
+        });
+    };
+}
+
+// 示例输出:
+// NOT MATCHED: RabbitAutoConfiguration
+//   因为: OnClassCondition (RabbitTemplate.class not found)
+// → classpath 中没有 spring-rabbit → 不启用 Rabbit 自动配置
+```
+
+#### Q3: Spring Boot 如何检测 Servlet 还是 Reactive 环境？
+
+```java
+// WebApplicationType.deduceFromClasspath() 源码:
+public enum WebApplicationType {
+    NONE, SERVLET, REACTIVE;
+
+    static WebApplicationType deduceFromClasspath() {
+        // 1. 先检查是否有 Reactive 核心类
+        if (ClassUtils.isPresent(
+            "org.springframework.web.reactive.DispatcherHandler", null)
+            && !ClassUtils.isPresent(
+                "org.springframework.web.servlet.DispatcherServlet", null)) {
+            return REACTIVE;
+        }
+        // 2. 没有关键类 → 非 Web 环境
+        for (String className : SERVLET_INDICATOR_CLASSES) {
+            if (!ClassUtils.isPresent(className, null)) {
+                return NONE;
+            }
+        }
+        // 3. 有 Servlet 相关类 → Servlet 环境
+        return SERVLET;
+    }
+}
+
+// 关键判断逻辑:
+// - classpath 中有 DispatcherHandler 且无 DispatcherServlet → REACTIVE
+// - classpath 中有 DispatcherServlet → SERVLET
+// - classpath 中两者都没有 → NONE
+//
+// 引入 spring-boot-starter-web → SERVLET
+// 引入 spring-boot-starter-webflux → REACTIVE
+// 什么 Web starter 都不加 → NONE
+```
+
+#### Q4: BeanCurrentlyInCreationException 的堆栈
+
+```java
+// 典型异常信息:
+// org.springframework.beans.factory.BeanCurrentlyInCreationException:
+// Error creating bean with name 'serviceA':
+// Requested bean is currently in creation: Is there an unresolvable circular reference?
+
+// 堆栈关键信息:
+//   at DefaultSingletonBeanRegistry.getSingleton()
+//   at AbstractBeanFactory.doGetBean()
+//   ...
+//   可提取的信息:
+//   1. 涉及循环的 Bean 名 (serviceA)
+//   2. 当前线程调用栈 → 可追溯到 serviceA → serviceB → serviceA
+//   3. 确认是构造器注入还是 Setter 注入
+
+// 排查脚本:
+// grep -n "Circular" logs/app.log  ← 搜索日志中的关键字
+// 或启动参数: --debug 看 Detailed bean creation
+```
+
+#### Q5: @ExceptionHandler vs @ControllerAdvice 优先级
+
+```java
+// ★ @ControllerAdvice（全局）优先级高于 @ExceptionHandler（局部）
+
+@Controller
+public class UserController {
+    @ExceptionHandler(RuntimeException.class)   // ← 局部
+    public String handleLocal() { return "local"; }
+}
+
+@ControllerAdvice
+public class GlobalHandler {
+    @ExceptionHandler(RuntimeException.class)   // ← 全局
+    public String handleGlobal() { return "global"; }
+}
+
+// 结果: 全局的 handleGlobal() 会被调用
+// 原因: ExceptionHandlerExceptionResolver 在查找匹配的处理器时,
+//       @ControllerAdvice 的方法先于 Controller 内部的 @ExceptionHandler
+//       这是为了确保全局策略的一致性和可预测性
+```
+
+#### Q6: NESTED vs REQUIRES_NEW 在 JDBC 和 JTA 下的区别
+
+```java
+// JDBC 环境:
+// REQUIRES_NEW: 从连接池获取新的物理连接 → 两个独立事务
+//               ★ 外层回滚不影响内层, 内层回滚不影响外层
+//
+// NESTED: 使用 JDBC Savepoint
+//   conn.setSavepoint("sp1");   // 创建保存点
+//   // 内层事务...
+//   conn.rollback("sp1");       // 回滚到保存点
+//   // ★ 内层回滚后外层继续, 但外层回滚会导致内层也回滚
+
+// JTA 环境:
+//   JTA 不支持 Savepoint → NESTED 退化为 REQUIRED 行为!
+//   ★ 这是面试陷阱: JTA 下 NESTED 和 REQUIRED 行为完全一致
+
+// 对比表:
+// | 行为 | REQUIRES_NEW | NESTED(JDBC) | NESTED(JTA) |
+// | 外层回滚影响内层 | ❌ 不影响 | ✅ 影响 | ✅ 影响 |
+// | 内层回滚影响外层 | ❌ 不影响 | ❌ 不影响 | ✅ 影响 |
+// | 实现机制 | 独立连接 | Savepoint | 退化为REQUIRED |
+```
+
+#### Q7: @WebMvcTest 为什么不能测 Service 层？
+
+```java
+// @WebMvcTest 源码:
+@TypeExcludeFilters(WebMvcTypeExcludeFilter.class)  // ★ 关键!
+@AutoConfigureWebMvc
+@AutoConfigureMockMvc
+public @interface WebMvcTest {
+    Class<?>[] controllers() default {};
+}
+
+// WebMvcTypeExcludeFilter 排除了:
+//   @Service  @Repository  @Component 标注的类
+//   只保留:
+//   @Controller  @ControllerAdvice  @JsonComponent
+//   Filter  WebMvcConfigurer  HandlerMethodArgumentResolver
+
+// ★ 所以 UserService 不会被加载 → @Autowired 失败 → 必须用 @MockBean
+@WebMvcTest(UserController.class)
+class UserControllerTest {
+    @MockBean  // ★ 必须 Mock, 因为 Service 不会被 Spring 加载
+    private UserService userService;
+}
+```
+
+#### Q8: @TransactionalEventListener 在回滚时执行吗？
+
+```java
+@Service
+public class OrderService {
+    @Transactional
+    public void createOrder() {
+        orderRepo.save(new Order());
+        publisher.publishEvent(new OrderCreatedEvent());
+        throw new RuntimeException("模拟失败");  // ★ 事务回滚
+    }
+}
+
+@Component
+public class OrderListener {
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onCommit(OrderCreatedEvent e) {
+        // ★ 事务回滚 → 不执行!
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_ROLLBACK)
+    public void onRollback(OrderCreatedEvent e) {
+        // ★ 事务回滚 → 执行!
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMPLETION)
+    public void onComplete(OrderCreatedEvent e) {
+        // ★ 事务回滚 → 执行! (不论提交还是回滚都会触发)
+        // 等同于 AFTER_COMMIT + AFTER_ROLLBACK
+    }
+}
+```
+
+#### Q9: Spring Data JPA 方法名解析
+
+```java
+// findByAgeGreaterThanAndNameLike 解析:
+// → WHERE age > ?1 AND name LIKE ?2
+
+// 支持的全部关键词 (~20个):
+// And Or Between LessThan GreaterThan LessThanEqual GreaterThanEqual
+// IsNull IsNotNull NotNull Like NotLike StartingWith EndingWith Containing
+// OrderBy Asc Desc In NotIn True False IgnoreCase
+
+// 解析流程:
+// PartTreeJpaQuery → PartTree → 解析方法名为 OrPredicate → 
+// 每个 Part 生成一个 Criterion → 组合成完整 WHERE 子句
+```
+
+#### Q10: 10个 @Autowired 字段是否需要重构？
+
+```java
+// ★ 判断标准: 单一职责原则 + 圈复杂度
+
+@Service
+public class OrderService {
+    @Autowired private OrderRepository orderRepo;       // ✅ 相关: 订单 CRUD
+    @Autowired private UserRepository userRepo;         // ✅ 相关: 订单关联用户
+    @Autowired private InventoryService inventoryService; // ✅ 相关: 扣库存
+    @Autowired private PaymentService paymentService;     // ✅ 相关: 支付
+    @Autowired private EmailService emailService;         // ⚠️ 边界: 通知
+    @Autowired private SmsService smsService;             // ⚠️ 边界: 通知
+    @Autowired private InvoiceService invoiceService;     // ⚠️ 边界: 开票
+    @Autowired private LogisticsService logisticsService; // ❌ 无关: 物流
+    @Autowired private CouponService couponService;       // ❌ 无关: 优惠券
+    @Autowired private AnalyticsService analyticsService; // ❌ 无关: 分析
+
+    // 重构方案: 按业务拆
+    // OrderCore: orderRepo, userRepo, inventoryService, paymentService (4个)
+    // OrderNotification: emailService, smsService (2个)
+    // OrderFulfillment: invoiceService, logisticsService (2个)
+    // OrderMarketing: couponService, analyticsService (2个)
+}
+```
+
+#### Q11: lazy-initialization=true 时 @Scheduled 还执行吗？
+
+```java
+// ★ 不会执行！
+
+// 原因: @Scheduled 依赖于 TaskScheduler Bean。
+// 当 spring.main.lazy-initialization=true 时,
+// TaskScheduler 是懒加载的——只有第一次用到时才初始化。
+// 但 @Scheduled 的注册发生在 BeanPostProcessor 阶段,
+// 此时 TaskScheduler 还未被初始化 → 定时任务注册失败 → 不执行。
+
+// 解决方案:
+@Configuration
+public class SchedulerConfig {
+    @Bean
+    @Lazy(false)  // ★ 强制非懒加载
+    public TaskScheduler taskScheduler() {
+        return new ThreadPoolTaskScheduler();
+    }
+}
+```
+
+#### Q12: HibernateJpaAutoConfiguration 未匹配的原因
+
+```java
+// 可能原因 (按概率排序):
+
+// 1. 缺少 spring-boot-starter-data-jpa 依赖 (最常见)
+//    → pom.xml 中没有引入
+
+// 2. DataSource 不是 javax.sql.DataSource 的实现
+//    @ConditionalOnBean(DataSource.class) → 有 DataSource
+//    但 @ConditionalOnClass 检查了 EntityManagerFactoryBuilder
+
+// 3. 手动排除了
+//    @SpringBootApplication(exclude = HibernateJpaAutoConfiguration.class)
+
+// 排查:
+// ConditionEvaluationReport 会显示具体不满足的条件:
+//   HibernateJpaAutoConfiguration:
+//     Did not match:
+//       - @ConditionalOnClass: found required class 
+//         'org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean'
+//         (这是通过的)
+//       - @ConditionalOnSingleCandidate: javax.sql.DataSource found
+//         (这说明有 DataSource, JPA 自动配置应该生效)
+```
+
+#### Q13: FactoryBean vs BeanFactory
+
+```java
+// ★ 关系: FactoryBean 是"创建复杂 Bean 的工厂", BeanFactory 是"整个 IoC 容器"
+
+// 命名混淆是故意的: FactoryBean 命名了"它生产什么" (Bean)
+
+// 代码层面:
+public interface BeanFactory {
+    Object getBean(String name);  // 容器的核心——获取 Bean
+}
+
+public interface FactoryBean<T> {
+    T getObject() throws Exception;     // 工厂——创建特定类型的对象
+    Class<?> getObjectType();
+}
+
+// getBean("userMapper")  → 返回 UserMapper 的动态代理 (FactoryBean 的产物)
+// getBean("&userMapper") → 返回 MapperFactoryBean 本身 (加 & 前缀!)
+//
+// 经典应用:
+//   MyBatis: MapperFactoryBean<UserMapper> → getObject() 返回 UserMapper 的 JDK 代理
+//   Feign:   FeignClientFactoryBean → getObject() 返回 Feign 动态代理
+//   AOP:     ProxyFactoryBean → getObject() 返回 AOP 代理对象
+```
+
+#### Q14: ReflectiveMethodInvocation.proceed() 调用栈
+
+```java
+// 以 @Before + @Around + 目标方法为例:
+
+proceed() // index=-1 → index=0 → 执行 @Before
+  └─ @Before 方法执行
+  └─ @Before 内部调 proceed()
+      └─ proceed() // index=0 → index=1 → 执行 @Around
+          └─ @Around: 前置逻辑
+          └─ @Around 内部调 proceed()
+              └─ proceed() // index=1 → index=2 → 执行目标方法
+                  └─ invokeJoinpoint() → 执行原始方法
+              └─ @Around: 后置逻辑
+      └─ @Before 返回
+
+// ★ 本质: 拦截器内部递归调用 proceed(), 
+//   currentInterceptorIndex 递增, 直到 = interceptors.size()
+//   形成: 拦截器1 → 拦截器2 → ... → 目标方法 → ... → 拦截器2 → 拦截器1
+```
+
+#### Q15: ResolvableType 如何反推泛型
+
+```java
+// 问题: JpaRepository<User, Long> 在运行时泛型被擦除
+//       如何知道 T=User, ID=Long?
+
+public interface UserRepository extends JpaRepository<User, Long> {}
+
+// ResolvableType 解析过程:
+Class<?> repoClass = UserRepository.class;
+
+// 1. 获取父接口 JpaRepository
+Type genericSuper = repoClass.getGenericInterfaces()[0];  
+// → ParameterizedType: JpaRepository<User, Long>
+
+// 2. 提取实际类型参数
+ParameterizedType pt = (ParameterizedType) genericSuper;
+Type[] actualTypeArgs = pt.getActualTypeArguments();
+// → actualTypeArgs = [User.class, Long.class]
+
+// 3. ResolvableType 封装:
+ResolvableType resolvableType = ResolvableType.forClass(repoClass);
+Class<?> entityClass = resolvableType.as(JpaRepository.class).getGeneric(0).resolve();
+// → entityClass = User.class  ✅
+```
+
+#### Q16: Nacos 长轮询 vs 短轮询
+
+```java
+// 短轮询:
+//   客户端每隔 1 秒发 GET /config → 99% 的请求是浪费的
+//   1000 个客户端 → 1000 次/秒请求
+
+// 长轮询:
+//   客户端: GET /config?timeout=30000  (30秒超时)
+//   服务端: 30 秒内配置有变化 → 立即返回新配置
+//           30 秒内无变化 → 返回 304 Not Modified
+//   客户端收到响应后立即发起下一个长轮询请求
+//   1000 个客户端 → 极低请求量 (只在配置变化时才真正传输)
+
+// ★ 为什么 30 秒?
+//   太短(5s)→ 请求频率高 → 服务端压力大
+//   太长(120s)→ 网络中间设备(nginx/负载均衡)会断开连接
+//   30s 是平衡点
+
+// Nacos 默认超时: 30000ms (启动参数可调)
+```
+
+#### Q17: Sentinel 关联限流和热点限流
+
+```java
+// ★ 关联限流: 保护下游系统
+// 场景: 支付接口 QPS 过高 → 主动限制下单接口 QPS
+// 原因: 支付失败了用户会重试, 不如直接限下单, 让用户稍后重试
+//
+// Sentinel 配置:
+//   FlowRule rule = new FlowRule("createOrder");
+//   rule.setGrade(RuleConstant.FLOW_GRADE_QPS);
+//   rule.setCount(10);  // QPS 上限 10
+//   rule.setRefResource("payOrder");  // ★ 关联资源: 当 payOrder QPS 过高时生效
+
+// ★ 热点限流: 对特定参数值限流
+// 场景: userId=999 这个用户刷接口, 限他但不影响其他用户
+//
+//   ParamFlowRule rule = new ParamFlowRule("getUserInfo");
+//   rule.setParamIdx(0);  // 第 0 个参数 (userId)
+//   rule.setCount(100);   // 默认 QPS 上限
+//   ParamFlowItem item = new ParamFlowItem();
+//   item.setObject("999");  // userId=999 限制为 10 QPS
+//   item.setCount(10);
+//   rule.setParamFlowItemList(List.of(item));
+```
+
+#### Q18: Gateway Filter vs MVC Interceptor
+
+```java
+// ★ 核心区别: Gateway Filter 在请求到达后端服务之前拦截
+//           MVC Interceptor 在 DispatcherServlet 内部拦截
+
+// 网络拓扑:
+// 客户端 → Gateway Filter → [路由转发] → 后端服务 → MVC Interceptor → Controller
+
+// | 维度 | Gateway Filter | MVC Interceptor |
+// | 请求对象 | ServerWebExchange(响应式) | HttpServletRequest |
+// | 执行时机 | 网关层, 请求到达后端服务之前 | DispatcherServlet 内 |
+// | 跨服务 | ✅ 全局统一 | ❌ 仅影响本服务 |
+// | 限流/鉴权 | ✅ 网关层做 | ⚠️ 每个服务自己做 |
+// | 日志/链路追踪 | ✅ 网关统一处理 | ⚠️ 需要每个服务配置 |
+
+// ★ 不能互相替代: Gateway Filter 运行在 Netty 响应式环境,
+//   无法直接访问 Servlet API (HttpServletRequest/Response)
+```
+
+#### Q19: MyBatis 插件为什么只拦截四种对象？
+
+```java
+// MyBatis 插件可拦截的四种对象覆盖了 SQL 执行的全生命周期:
+
+// 1. Executor       → 增删改查入口, 可以拦截所有 SQL 执行
+//    PageHelper 在这里拦截 query() 方法, 修改 SQL 加 LIMIT
+
+// 2. StatementHandler → SQL 语句的创建和参数设置
+//    在这里可以修改最终执行的 SQL 字符串
+
+// 3. ParameterHandler → 参数处理, 将 Java 对象映射到 JDBC 参数
+//    可以在此加密/脱敏参数
+
+// 4. ResultSetHandler → 结果集处理, 将 JDBC ResultSet 映射到 Java 对象
+//    可以在此解密/脱敏结果
+
+// ★ 这四种正好是一条 SQL 的完整执行链:
+//   Executor → StatementHandler → ParameterHandler → JDBC 执行 → ResultSetHandler
+//   任何一环都可以被拦截, 覆盖了所有可能的拦截需求
+```
+
+#### Q20: MyBatis 一级缓存在 Spring 中失效的原因
+
+```java
+// ★ 核心原因: SqlSessionTemplate 每次查询打开新的 SqlSession
+
+// Spring 集成 MyBatis 时使用 SqlSessionTemplate 管理 SqlSession
+// SqlSessionTemplate 的实现:
+public class SqlSessionTemplate implements SqlSession {
+    // 每次查询 → 创建新 SqlSession → 查完 → 关闭
+    // → 一级缓存的作用域是 SqlSession → 每次都是新的 → 缓存失效!
+}
+
+// 解决方案:
+// 1. 手动开启二级缓存 (全局配置 + Mapper 注解)
+//    @CacheNamespace  ← Mapper 接口上加
+//    mybatis.configuration.cache-enabled=true
+
+// 2. 将多个查询放在一个事务中
+@Transactional
+public void batchQuery() {
+    userMapper.findById(1L);  // 一级缓存有效 (同一事务 = 同一 SqlSession)
+    userMapper.findById(1L);  // 一级缓存命中!
+}
+
+// 3. 使用 Spring Cache (@Cacheable) 替代 MyBatis 缓存
+@Cacheable("users")
+public User findById(Long id) { return userMapper.findById(id); }
+```
 
 ---
 
