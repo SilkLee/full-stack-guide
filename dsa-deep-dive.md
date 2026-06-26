@@ -1,381 +1,437 @@
 # 数据结构与算法深度解析 (Java 图文版)
 
-> 每个算法配图解——先看图理解，再看代码实现。从面试到 Spring 源码落地。
+> 每道题：先看图理解 → 再读代码 → 最后看 Spring 怎么用。
 
 ---
 
 ## 目录
 
-### 基础篇
 - [1. 复杂度分析](#1-复杂度分析)
-- [2. 数组与链表](#2-数组与链表)
-- [3. 栈与队列](#3-栈与队列)
-- [4. 哈希表](#4-哈希表)
-- [5. 排序算法](#5-排序算法)
+- [2. 双指针与滑动窗口](#2-双指针与滑动窗口)
+- [3. 链表](#3-链表)
+- [4. 栈与单调栈](#4-栈与单调栈)
+- [5. 哈希表](#5-哈希表)
 - [6. 二分查找](#6-二分查找)
-
-### 进阶篇
-- [7. 二叉树](#7-二叉树)
-- [8. 堆与优先队列](#8-堆与优先队列)
+- [7. 排序算法](#7-排序算法)
+- [8. 二叉树](#8-二叉树)
 - [9. 回溯算法](#9-回溯算法)
 - [10. 动态规划](#10-动态规划)
-- [11. 图论](#11-图论)
-
-### 高级篇
-- [12. Trie 前缀树](#12-trie-前缀树)
-- [13. 并查集 Union-Find](#13-并查集-union-find)
-- [14. 线段树与树状数组](#14-线段树与树状数组)
+- [11. 贪心算法](#11-贪心算法)
+- [12. 堆](#12-堆)
+- [13. 图论](#13-图论)
+- [14. Trie / 并查集 / 树状数组 / 线段树](#14-高级数据结构)
 - [15. 字符串算法](#15-字符串算法)
-- [16. 位运算技巧](#16-位运算技巧)
-- [17. 设计模式题](#17-设计模式题)
-
-### Spring 落地篇
-- [18. 算法在 Spring 全家桶中的应用](#18-算法在-spring-全家桶中的应用)
+- [16. Spring 源码落地速查](#16-spring-源码落地速查)
 
 ---
-
-# 基础篇
 
 ## 1. 复杂度分析
 
-### 1.1 时间复杂度全景
-
 ```mermaid
 flowchart LR
-    O1["O(1) 常数<br/>HashMap查找"] --> Ologn["O(log n)<br/>二分/堆"]
-    Ologn --> On["O(n) 线性<br/>遍历数组"]
-    On --> Onlogn["O(n log n)<br/>快排/归并"]
-    Onlogn --> On2["O(n²)<br/>双重循环"]
-    On2 --> O2n["O(2ⁿ)<br/>子集枚举"]
-    O2n --> Onf["O(n!)<br/>全排列"]
+    O1["O(1) 常数"] --> Ologn["O(log n) 二分"]
+    Ologn --> On["O(n) 遍历"]
+    On --> Onlogn["O(n log n) 排序"]
+    Onlogn --> On2["O(n²) 双重循环"]
+    On2 --> O2n["O(2ⁿ) 子集枚举"]
 ```
 
-### 1.2 不同 n 下算法能跑吗？
-
-| n | 可用算法 | 不可用 |
-|----|---------|--------|
-| ≤ 10 | O(n!) 全排列 | — |
-| ≤ 20 | O(2ⁿ) 子集枚举 | O(n!) |
-| ≤ 100 | O(n³) Floyd | O(2ⁿ) |
-| ≤ 10³ | O(n²) 简单 DP | O(n³) |
-| ≤ 10⁵ | O(n log n) 排序 | O(n²) |
-| ≤ 10⁶ | O(n) 线性扫描 | O(n log n) ❌ |
-| ≤ 10⁹ | O(log n) 二分 | O(n) ❌ |
+| n | 可用 O(n²) | 可用 O(n log n) | 可用 O(n) |
+|----|-----------|----------------|----------|
+| 10³| ✅ | ✅ | ✅ |
+| 10⁵| ❌ | ✅ | ✅ |
+| 10⁶| ❌ | ⚠️ | ✅ |
+| 10⁹| ❌ | ❌ | ❌ (需 O(log n)) |
 
 ---
 
-## 2. 数组与链表
+## 2. 双指针与滑动窗口
 
-### 2.1 双指针本质
-
-```
-问题: 在排序数组中找两数之和 = target
-
-       [2, 7, 11, 15]  target = 9
-        ↑          ↑
-       left      right
-
-左指针 left = 0, 右指针 right = 3
-  sum = 2 + 15 = 17 > 9 → 太大了, right 左移
-  sum = 2 + 11 = 13 > 9 → 还是大, right 再左移
-  sum = 2 + 7  = 9  ✅ 找到!
-
-每次移动一个指针, O(n) 完成。
-```
-
-```mermaid
-flowchart LR
-    subgraph STEP1["Step 1: left=0, right=3"]
-        A1["2"] & A2["7"] & A3["11"] & A4["15"]
-        L1["↑left"] & R1["↑right"]
-    end
-    subgraph STEP2["Step 2: 17>9→right左移"]
-        B1["2"] & B2["7"] & B3["11"] & B4["15"]
-        L2["↑left"] & R2["↑right"]
-    end
-    subgraph STEP3["Step 3: 找到!"]
-        C1["2"] & C2["7"] & C3["11"] & C4["15"]
-        L3["↑✓"] & R3["↑✓"]
-    end
-    STEP1 --> STEP2 --> STEP3
-```
-
-### 2.2 链表反转图解
+### 2.1 对撞指针 — 两数之和 II
 
 ```
-反转前:  head → [1] → [2] → [3] → null
-
-Step 0:  prev=null, curr=[1]
-         null ← ? [1] → [2] → [3] → null
-                  ↑curr
-
-Step 1:  记 nxt=[2], 反转 [1]→null
-         null ← [1]    [2] → [3] → null
-           ↑prev ↑curr
-
-Step 2:  记 nxt=[3], 反转 [2]→[1]
-         null ← [1] ← [2]    [3] → null
-                    ↑prev  ↑curr
-
-Step 3:  反转 [3]→[2]
-         null ← [1] ← [2] ← [3]
-                            ↑prev
-完成:    [3] → [2] → [1] → null
-```
-
-```mermaid
-flowchart LR
-    subgraph BEFORE["反转前"]
-        A1["1"] --> A2["2"] --> A3["3"] --> A4["null"]
-    end
-    subgraph AFTER["反转后"]
-        B3["3"] --> B2["2"] --> B1["1"] --> B4["null"]
-    end
-    BEFORE -.->|"prev/curr/nxt 三指针"| AFTER
+[2, 7, 11, 15], target=9
+ ↑L         ↑R
+ 2+15=17>9 → R左移
+ 2+11=13>9 → R左移
+ 2+7=9 ✅
 ```
 
 ```java
-// 反转链表 — 对照上图理解每一步
+public int[] twoSum(int[] nums, int target) {
+    int L = 0, R = nums.length - 1;
+    while (L < R) {
+        int sum = nums[L] + nums[R];
+        if (sum == target) return new int[]{L + 1, R + 1};
+        if (sum < target) L++; else R--;
+    }
+    return new int[]{-1, -1};
+}
+```
+
+### 2.2 快慢指针 — 原地去重
+
+```java
+public int removeDuplicates(int[] nums) {
+    int slow = 0;
+    for (int fast = 1; fast < nums.length; fast++)
+        if (nums[fast] != nums[slow]) nums[++slow] = nums[fast];
+    return slow + 1;
+}
+```
+
+### 2.3 滑动窗口 — 定长子数组最大和
+
+```
+nums=[1,4,2,10,23,3,1,0,20], k=4
+窗口[1,4,2,10]=17 → max=17
+窗口[4,2,10,23]=39 → 入23出1 → max=39
+窗口[2,10,23,3]=38 → 入3出4 → max=39
+```
+
+```java
+public int maxSum(int[] nums, int k) {
+    int sum = 0;
+    for (int i = 0; i < k; i++) sum += nums[i];
+    int max = sum;
+    for (int i = k; i < nums.length; i++) {
+        sum += nums[i] - nums[i - k];
+        max = Math.max(max, sum);
+    }
+    return max;
+}
+```
+
+### 2.4 无重复字符最长子串 — 滑动窗口 + HashMap
+
+```java
+public int lengthOfLongestSubstring(String s) {
+    Map<Character, Integer> map = new HashMap<>();
+    int L = 0, max = 0;
+    for (int R = 0; R < s.length(); R++) {
+        char c = s.charAt(R);
+        if (map.containsKey(c) && map.get(c) >= L)
+            L = map.get(c) + 1;
+        map.put(c, R);
+        max = Math.max(max, R - L + 1);
+    }
+    return max;
+}
+```
+
+---
+
+## 3. 链表
+
+### 3.1 反转链表
+
+```
+反转前: 1→2→3→null
+反转后: 3→2→1→null
+
+三指针: prev=null, curr=1
+  step1: next=2,  curr→prev(null), prev=1, curr=2
+  step2: next=3,  curr→prev(1),    prev=2, curr=3
+  step3: next=null, curr→prev(2),  prev=3, curr=null → 结束
+```
+
+```java
 public ListNode reverseList(ListNode head) {
     ListNode prev = null, curr = head;
     while (curr != null) {
-        ListNode next = curr.next;  // 1. 记下后继 (下一步要去哪)
-        curr.next = prev;           // 2. 反转: 掉头指向前驱
-        prev = curr;                // 3. prev 跟进一步
-        curr = next;                // 4. curr 跟进一步
+        ListNode next = curr.next;
+        curr.next = prev;
+        prev = curr;
+        curr = next;
     }
     return prev;
 }
 ```
 
-### 2.3 环形检测 — 快慢指针
+### 3.2 环形检测 + 找中点
 
-```mermaid
-flowchart LR
-    subgraph LOOP["有环链表"]
-        S1["1"] --> S2["2"] --> S3["3"] --> S4["4"]
-        S4 --> S2
-    end
+```java
+// 判环
+public boolean hasCycle(ListNode head) {
+    ListNode slow = head, fast = head;
+    while (fast != null && fast.next != null) {
+        slow = slow.next; fast = fast.next.next;
+        if (slow == fast) return true;
+    }
+    return false;
+}
 
-    subgraph RACE["快慢指针赛跑"]
-        R1["slow 每次走1步<br/>fast 每次走2步"]
-        R2["如果 fast 追上 slow<br/>→ 有环!"]
-        R3["如果 fast 到 null<br/>→ 无环"]
-    end
+// 找中点
+public ListNode middleNode(ListNode head) {
+    ListNode slow = head, fast = head;
+    while (fast != null && fast.next != null) {
+        slow = slow.next; fast = fast.next.next;
+    }
+    return slow;
+}
+```
 
-    LOOP -.-> RACE
+### 3.3 合并两个有序链表 + 合并 K 个
+
+```java
+// 合并两个
+public ListNode mergeTwo(ListNode a, ListNode b) {
+    if (a == null) return b; if (b == null) return a;
+    if (a.val < b.val) { a.next = mergeTwo(a.next, b); return a; }
+    else { b.next = mergeTwo(a, b.next); return b; }
+}
+
+// 合并 K 个 — PriorityQueue
+public ListNode mergeKLists(ListNode[] lists) {
+    PriorityQueue<ListNode> pq = new PriorityQueue<>((x,y)->x.val-y.val);
+    for (ListNode n : lists) if (n != null) pq.offer(n);
+    ListNode dummy = new ListNode(0), cur = dummy;
+    while (!pq.isEmpty()) {
+        ListNode min = pq.poll(); cur.next = min; cur = cur.next;
+        if (min.next != null) pq.offer(min.next);
+    }
+    return dummy.next;
+}
 ```
 
 ---
 
-## 3. 栈与队列
+## 4. 栈与单调栈
 
-### 3.1 单调栈 — 下一个更大元素
+### 4.1 有效括号
+
+```java
+public boolean isValid(String s) {
+    Deque<Character> stack = new ArrayDeque<>();
+    for (char c : s.toCharArray()) {
+        if (c == '(') stack.push(')');
+        else if (c == '[') stack.push(']');
+        else if (c == '{') stack.push('}');
+        else if (stack.isEmpty() || stack.pop() != c) return false;
+    }
+    return stack.isEmpty();
+}
+```
+
+### 4.2 单调栈 — 每日温度
 
 ```
-问题: 数组中每个元素右边第一个比它大的元素
+temperatures = [73,74,75,71,69,72,76,73]
 
-nums = [2, 1, 2, 4, 3]
-
-栈的视角 (从右往左看):
-
-                        ┌───┐
-  i=4, v=3 → push 3     │ 3 │   栈: [3]
-                        └───┘
-                        ┌───┐
-  i=3, v=4 → pop 3     │ 4 │   栈: [4]  (3比4小, 被弹出)
-                        └───┘
-                        ┌───┐
-  i=2, v=2 → 栈顶4>2   │ 2 │   栈: [4,2]  res[2]=4
-                        │ 4 │
-                        └───┘
-                        ┌───┐
-  i=1, v=1 → 栈顶2>1   │ 1 │   栈: [4,2,1]  res[1]=2
-                        │ 2 │
-                        │ 4 │
-                        └───┘
-                        ┌───┐
-  i=0, v=2 → pop 1,2   │ 4 │   栈: [4]  res[0]=4
-                        └───┘
-
-结果: [4, 2, 4, -1, -1]
+i=0:73 栈[0]  → i=1:74>73 → res[0]=1
+i=1:74 栈[1]  → i=2:75>74 → res[1]=1
+i=2:75 栈[2]  → i=3:71<75 → 入栈[2,3]
+i=4:69<71 → 入栈[2,3,4]
+i=5:72>69 → res[4]=1, 72>71→res[3]=2
+i=6:76>72 → res[5]=1, 76>75→res[2]=4
+结果: [1,1,4,2,1,1,0,0]
 ```
 
 ```java
-public int[] nextGreaterElement(int[] nums) {
-    int[] res = new int[nums.length];
-    Arrays.fill(res, -1);
-    Deque<Integer> stack = new ArrayDeque<>();  // 存索引
-
-    for (int i = 0; i < nums.length; i++) {
-        // ★ 当前元素比栈顶大 → 栈顶的答案找到了
-        while (!stack.isEmpty() && nums[stack.peek()] < nums[i])
-            res[stack.pop()] = nums[i];
+public int[] dailyTemperatures(int[] t) {
+    int[] res = new int[t.length];
+    Deque<Integer> stack = new ArrayDeque<>();
+    for (int i = 0; i < t.length; i++) {
+        while (!stack.isEmpty() && t[i] > t[stack.peek()])
+            res[stack.peek()] = i - stack.pop();
         stack.push(i);
     }
     return res;
 }
 ```
 
-### 3.2 队列 — BFS 按层遍历的秘诀
+### 4.3 接雨水
 
-```mermaid
-flowchart TB
-    subgraph TREE["二叉树"]
-        R["1(根)"] --> L["2"] & R2["3"]
-        L --> L1["4"] & L2["5"]
-        R2 --> R3["6"] & R4["7"]
-    end
+```
+height = [0,1,0,2,1,0,1,3,2,1,2,1]
 
-    subgraph BFS["BFS 逐层"]
-        Q1["Queue: [1]"] --> Q2["出1, 入2,3 → [2,3]"]
-        Q2 --> Q3["出2, 入4,5 → [3,4,5]"]
-        Q3 --> Q4["出3, 入6,7 → [4,5,6,7]"]
-    end
+      █
+  █   ██ █
+█ ██ ██████
+雨水总量 = 6 (填在凹槽处)
 
-    TREE -.-> BFS
+★ 单调栈: 遇到更高的柱子时, 计算"凹槽"水量 = 宽 × min(左高,右高)
 ```
 
 ```java
-// BFS 逐层处理的关键: for (int i = q.size(); i > 0; i--)
-public List<List<Integer>> levelOrder(TreeNode root) {
-    List<List<Integer>> res = new ArrayList<>();
-    if (root == null) return res;
-    Queue<TreeNode> q = new LinkedList<>(); q.offer(root);
-
-    while (!q.isEmpty()) {
-        List<Integer> level = new ArrayList<>();
-        int size = q.size();  // ★ 关键: 当前层的节点数
-        for (int i = 0; i < size; i++) {
-            TreeNode node = q.poll();
-            level.add(node.val);
-            if (node.left != null) q.offer(node.left);
-            if (node.right != null) q.offer(node.right);
+public int trap(int[] height) {
+    Deque<Integer> stack = new ArrayDeque<>();
+    int water = 0;
+    for (int i = 0; i < height.length; i++) {
+        while (!stack.isEmpty() && height[i] > height[stack.peek()]) {
+            int mid = stack.pop();
+            if (stack.isEmpty()) break;
+            int w = i - stack.peek() - 1;
+            int h = Math.min(height[i], height[stack.peek()]) - height[mid];
+            water += w * h;
         }
-        res.add(level);
+        stack.push(i);
     }
-    return res;
+    return water;
 }
 ```
 
 ---
 
-## 4. 哈希表
+## 5. 哈希表
 
-### 4.1 哈希冲突怎么解决？
-
-```mermaid
-flowchart TB
-    Key["key: 'Alice'"] --> Hash["hash(Alice) = 3"]
-    Hash --> Bucket["bucket[3]"]
-
-    Bucket --> Chain["★ 拉链法 (HashMap):<br/>桶内是一个链表/红黑树<br/>Alice → Bob → Charlie"]
-    
-    Bucket --> Open["★ 开放寻址 (ThreadLocal):<br/>桶满了就找下一个空桶<br/>3满了找4, 4满了找5"]
-```
-
-### 4.2 HashMap 为什么用 (n-1) & hash？
+### 5.1 HashMap 索引计算
 
 ```
-假设 table.length = 16 (n=16)
+table.length = 16 (一定是 2 的幂)
 
-  n     = 16 = 0001 0000
-  n-1   = 15 = 0000 1111
+hash = 18 = 0001 0010
+n-1  = 15 = 0000 1111
+       & = 0000 0010 = 2  ← index
 
-  hash  =      0101 1010
-  n-1   =    & 0000 1111
-  ─────────────────────
-  index =      0000 1010 = 10
-
-★ 本质: (n-1) & hash = hash % n
-  但当 n = 2ᵏ 时, & 比 % 快 10+ 倍!
+★ (n-1) & hash = hash % n (当 n=2ᵏ 时)
+  & 比 % 快 10 倍
 ```
 
----
+### 5.2 两数之和
 
-## 5. 排序算法
-
-### 5.1 快排分区过程图解
-
-```
-快排是怎么把数组分成"小于 pivot"和"大于 pivot"的?
-
-arr = [3, 1, 4, 1, 5, 9, 2, 6], pivot = arr[7] = 6
-
-i=0: 3 < 6 → swap(0,0) → [3,1,4,1,5,9,2,6]  i=1
-i=1: 1 < 6 → swap(1,1) → [3,1,4,1,5,9,2,6]  i=2
-i=2: 4 < 6 → swap(2,2) → [3,1,4,1,5,9,2,6]  i=3
-i=3: 1 < 6 → swap(3,3) → [3,1,4,1,5,9,2,6]  i=4
-i=4: 5 < 6 → swap(4,4) → [3,1,4,1,5,9,2,6]  i=5
-i=5: 9 > 6 → 不动                       i=5
-i=6: 2 < 6 → swap(5,6) → [3,1,4,1,5,2,9,6]  i=6
-最后: swap(i=6, hi=7) → [3,1,4,1,5,2, 6, 9]
-                               ≤6的都在左边 ↑  ↑ ≥6的在右边
+```java
+public int[] twoSum(int[] nums, int target) {
+    Map<Integer, Integer> map = new HashMap<>();
+    for (int i = 0; i < nums.length; i++) {
+        int c = target - nums[i];
+        if (map.containsKey(c)) return new int[]{map.get(c), i};
+        map.put(nums[i], i);
+    }
+    return new int[]{-1, -1};
+}
 ```
 
-```mermaid
-flowchart LR
-    subgraph BEFORE["分区前"]
-        A["3,1,4,1,5,9,2 | 6"]
-    end
-    subgraph AFTER["分区后"]
-        B["3,1,4,1,5,2 | 6 | 9"]
-    end
-    BEFORE -->|"Lomuto分区"| AFTER
+### 5.3 字母异位词分组
+
+```java
+public List<List<String>> groupAnagrams(String[] strs) {
+    Map<String, List<String>> map = new HashMap<>();
+    for (String s : strs) {
+        char[] chars = s.toCharArray(); Arrays.sort(chars);
+        String key = new String(chars);
+        map.computeIfAbsent(key, k -> new ArrayList<>()).add(s);
+    }
+    return new ArrayList<>(map.values());
+}
 ```
-
-### 5.2 排序算法选择
-
-| 场景 | 推荐 | 原因 |
-|------|------|------|
-| 通用 | Arrays.sort() | Dual-Pivot QuickSort |
-| 对象排序 | **TimSort** (稳定) | 实际数据最优 |
-| 需要稳定 | 归并排序 | 保持相等元素顺序 |
-| 取 Top K | PriorityQueue / Quick Select | 不需要全排序 |
-| 几乎有序 | 插入排序 | 接近 O(n) |
 
 ---
 
 ## 6. 二分查找
 
-### 6.1 左边界 vs 右边界 — 一图搞懂
+### 6.1 三种变体
 
 ```
-nums = [1, 2, 2, 2, 3, 4], target = 2
+nums = [1,2,2,2,3,4], target=2
 
-索引:  0  1  2  3  4  5
-值:   [1, 2, 2, 2, 3, 4]
-         ↑     ↑
-    左边界=1  右边界=4 (第一个>2的位置)
-
-二分查找:  返回 2 (任意一个2的位置)
-lowerBound: 返回 1 (第一个 ≥ 2 的位置)
-upperBound: 返回 4 (第一个 > 2 的位置)
+binarySearch: 返回 2 (任意一个)
+lowerBound:   返回 1 (第一个≥2, leftmost)
+upperBound:   返回 4 (第一个>2)
 ```
 
 ```java
-// 三个变体, 区别只在 if 条件
-int binarySearch(int[] a, int t) { /* nums[mid] == t → 返回 */ }
-int lowerBound(int[] a, int t)   { /* nums[mid] >= t → hi = mid */ }
-int upperBound(int[] a, int t)   { /* nums[mid] >  t → hi = mid */ }
+// 精确查找
+public int search(int[] nums, int target) {
+    int L = 0, R = nums.length - 1;
+    while (L <= R) {
+        int mid = L + (R - L) / 2;
+        if (nums[mid] == target) return mid;
+        if (nums[mid] < target) L = mid + 1;
+        else R = mid - 1;
+    }
+    return -1;
+}
+
+// 左边界 (第一个 ≥ target)
+public int lowerBound(int[] nums, int target) {
+    int L = 0, R = nums.length;
+    while (L < R) {
+        int mid = L + (R - L) / 2;
+        if (nums[mid] >= target) R = mid;
+        else L = mid + 1;
+    }
+    return L;
+}
+```
+
+### 6.2 旋转数组搜索
+
+```java
+// [4,5,6,7,0,1,2], target=0 → 返回 4
+public int searchRotated(int[] nums, int target) {
+    int L = 0, R = nums.length - 1;
+    while (L <= R) {
+        int mid = L + (R - L) / 2;
+        if (nums[mid] == target) return mid;
+        if (nums[L] <= nums[mid]) { // 左半有序
+            if (nums[L] <= target && target < nums[mid]) R = mid - 1;
+            else L = mid + 1;
+        } else {
+            if (nums[mid] < target && target <= nums[R]) L = mid + 1;
+            else R = mid - 1;
+        }
+    }
+    return -1;
+}
 ```
 
 ---
 
-# 进阶篇
+## 7. 排序算法
 
-## 7. 二叉树
+### 7.1 快排 + Quick Select
 
-### 7.1 三种 DFS 遍历 — 一句话记一辈子
+```java
+public void quickSort(int[] arr, int lo, int hi) {
+    if (lo >= hi) return;
+    int pivot = arr[hi], i = lo;
+    for (int j = lo; j < hi; j++)
+        if (arr[j] <= pivot) { swap(arr, i, j); i++; }
+    swap(arr, i, hi);
+    quickSort(arr, lo, i - 1); quickSort(arr, i + 1, hi);
+}
 
-```mermaid
-flowchart TB
-    subgraph DFS["DFS 三种序"]
-        PRE["前序: 根→左→右<br/>复制树、序列化"]
-        IN["中序: 左→根→右<br/>BST 按序输出"]
-        POST["后序: 左→右→根<br/>删除节点、计算高度"]
-    end
+// Quick Select — 第 K 大 O(n)
+public int findKthLargest(int[] nums, int k) {
+    k = nums.length - k; // 转第 k 小
+    return quickSelect(nums, 0, nums.length - 1, k);
+}
+
+private int quickSelect(int[] nums, int lo, int hi, int k) {
+    int pivot = nums[hi], i = lo;
+    for (int j = lo; j < hi; j++)
+        if (nums[j] <= pivot) { swap(nums, i, j); i++; }
+    swap(nums, i, hi);
+    if (i == k) return nums[i];
+    return i < k ? quickSelect(nums, i+1, hi, k) : quickSelect(nums, lo, i-1, k);
+}
+
+private void swap(int[] arr, int i, int j) {
+    int t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+}
 ```
+
+### 7.2 归并排序
+
+```java
+public void mergeSort(int[] arr, int lo, int hi) {
+    if (lo >= hi) return;
+    int mid = lo + (hi - lo) / 2;
+    mergeSort(arr, lo, mid); mergeSort(arr, mid+1, hi);
+    int[] tmp = new int[hi-lo+1]; int i = lo, j = mid+1, k = 0;
+    while (i <= mid && j <= hi) tmp[k++] = arr[i] <= arr[j] ? arr[i++] : arr[j++];
+    while (i <= mid) tmp[k++] = arr[i++];
+    while (j <= hi) tmp[k++] = arr[j++];
+    System.arraycopy(tmp, 0, arr, lo, tmp.length);
+}
+```
+
+---
+
+## 8. 二叉树
+
+### 8.1 DFS 三种遍历
 
 ```
      1
@@ -384,494 +440,498 @@ flowchart TB
   / \
  4   5
 
-前序: 1 → 2 → 4 → 5 → 3  (根最先)
-中序: 4 → 2 → 5 → 1 → 3  (BST 有序: 从小到大!)
-后序: 4 → 5 → 2 → 3 → 1  (子节点先, 根最后)
-```
-
-### 7.2 怎么从"前序+中序"还原一棵树？
-
-```
-前序: [3, 9, 20, 15, 7]  → 根是 3
-中序: [9, 3, 15, 20, 7]  → 3 左边是左子树 [9], 右边是右子树 [15,20,7]
-
-Step 1: 前序[0]=3 是根, 中序找到 3, 左边9是左, 右边15,20,7是右
-Step 2: 左子树: 前序[9] 中序[9] → 9 是叶节点
-Step 3: 右子树: 前序[20,15,7] 中序[15,20,7]
-         → 20 是根, 中序找到20, 左边15是左, 右边7是右
-
-还原:
-        3
-       / \
-      9   20
-         /  \
-        15   7
+前序 1-2-4-5-3 (根最先)  中序 4-2-5-1-3 (BST有序)
+后序 4-5-2-3-1 (子先根后) 层序 1-2-3-4-5 (BFS)
 ```
 
 ```java
+// 前序 (迭代)
+public List<Integer> preorder(TreeNode root) {
+    List<Integer> res = new ArrayList<>();
+    if (root == null) return res;
+    Deque<TreeNode> stack = new ArrayDeque<>(); stack.push(root);
+    while (!stack.isEmpty()) {
+        TreeNode node = stack.pop(); res.add(node.val);
+        if (node.right != null) stack.push(node.right);
+        if (node.left != null) stack.push(node.left);
+    }
+    return res;
+}
+
+// 中序 (迭代)
+public List<Integer> inorder(TreeNode root) {
+    List<Integer> res = new ArrayList<>();
+    Deque<TreeNode> stack = new ArrayDeque<>();
+    TreeNode cur = root;
+    while (cur != null || !stack.isEmpty()) {
+        while (cur != null) { stack.push(cur); cur = cur.left; }
+        cur = stack.pop(); res.add(cur.val);
+        cur = cur.right;
+    }
+    return res;
+}
+```
+
+### 8.2 验证 BST + 前中序构建树 + LCA
+
+```java
+// 验证 BST
+public boolean isValidBST(TreeNode root) {
+    return valid(root, Long.MIN_VALUE, Long.MAX_VALUE);
+}
+private boolean valid(TreeNode n, long lo, long hi) {
+    if (n == null) return true;
+    if (n.val <= lo || n.val >= hi) return false;
+    return valid(n.left, lo, n.val) && valid(n.right, n.val, hi);
+}
+
+// 前+中 → 构建
 public TreeNode buildTree(int[] pre, int[] in) {
-    // 用 HashMap 存中序索引, O(1) 找到 root 位置
     Map<Integer, Integer> map = new HashMap<>();
     for (int i = 0; i < in.length; i++) map.put(in[i], i);
     return build(pre, 0, pre.length-1, in, 0, in.length-1, map);
 }
+private TreeNode build(int[] pre, int ps, int pe, int[] in, int is, int ie, Map<Integer,Integer> map) {
+    if (ps > pe) return null;
+    TreeNode root = new TreeNode(pre[ps]);
+    int split = map.get(root.val), leftSize = split - is;
+    root.left = build(pre, ps+1, ps+leftSize, in, is, split-1, map);
+    root.right = build(pre, ps+leftSize+1, pe, in, split+1, ie, map);
+    return root;
+}
+
+// LCA
+public TreeNode lowestCommonAncestor(TreeNode root, TreeNode p, TreeNode q) {
+    if (root == null || root == p || root == q) return root;
+    TreeNode L = lowestCommonAncestor(root.left, p, q);
+    TreeNode R = lowestCommonAncestor(root.right, p, q);
+    if (L != null && R != null) return root;
+    return L != null ? L : R;
+}
 ```
 
-### 7.3 LCA 最近公共祖先
+### 8.3 Morris 遍历 (O(1) 空间中序)
 
-```
-找节点 4 和 7 的最近公共祖先:
-
-        3
-       / \
-      5   1
-     / \ / \
-    6  2 0  8
-      / \
-     7   4
-
-★ 结论: 5
-
-原理:
-  从 root 开始:
-    left = 找(4,7) 在左子树中的结果 → 返回 5
-    right = 找(4,7) 在右子树中的结果 → 返回 null
-    左有 5, 右为 null → 说明都在左边 → 返回 5
-```
-
----
-
-## 8. 堆与优先队列
-
-### 8.1 堆的操作图解
-
-```mermaid
-flowchart TB
-    subgraph PUSH["插入 1"]
-        P1["[2,3,5,7,6,8]"] --> P2["插到最后<br/>[2,3,5,7,6,8,1]"]
-        P2 --> P3["★ 上浮: 1比父5小→交换<br/>[2,3,1,7,6,8,5]"]
-        P3 --> P4["继续上浮: 1比父2小→交换<br/>[1,3,2,7,6,8,5] ←完成"]
-    end
-
-    subgraph POP["弹出堆顶 1"]
-        Q1["堆顶 1 弹出"] --> Q2["最后一个元素 5 放到堆顶<br/>[5,3,2,7,6,8]"]
-        Q2 --> Q3["★ 下沉: 5比子3大→交换<br/>[2,3,5,7,6,8] ←完成"]
-    end
-```
-
-### 8.2 数据流中位数 — 双堆
-
-```
-流: [5] → [5,3] → [5,3,8] → [5,3,8,1]
-
-大顶堆(存小数)    小顶堆(存大数)    中位数
-   [5]              []              5
-   [3]              [5]             4.0
-   [5,3]            [8]             5
-   [3,1]            [5,8]           4.0
-
-★ 大顶堆存较小的一半, 小顶堆存较大的一半
-  维护 lo.size >= hi.size
-  中位数 = lo.size > hi.size ? lo.peek() : (lo+hi)/2
+```java
+public List<Integer> morrisInorder(TreeNode root) {
+    List<Integer> res = new ArrayList<>();
+    TreeNode cur = root;
+    while (cur != null) {
+        if (cur.left == null) { res.add(cur.val); cur = cur.right; }
+        else {
+            TreeNode pre = cur.left;
+            while (pre.right != null && pre.right != cur) pre = pre.right;
+            if (pre.right == null) { pre.right = cur; cur = cur.left; }
+            else { pre.right = null; res.add(cur.val); cur = cur.right; }
+        }
+    }
+    return res;
+}
 ```
 
 ---
 
 ## 9. 回溯算法
 
-### 9.1 决策树 — 全排列
+### 9.1 全排列
 
-```mermaid
-flowchart TB
-    ROOT["[]"] --> L1["[1]"] & L2["[2]"] & L3["[3]"]
-
-    L1 --> L1A["[1,2]"] & L1B["[1,3]"]
-    L2 --> L2A["[2,1]"] & L2B["[2,3]"]
-    L3 --> L3A["[3,1]"] & L3B["[3,2]"]
-
-    L1A --> L1A1["[1,2,3] ✓"]
-    L1B --> L1B1["[1,3,2] ✓"]
-    L2A --> L2A1["[2,1,3] ✓"]
-    L2B --> L2B1["[2,3,1] ✓"]
-    L3A --> L3A1["[3,1,2] ✓"]
-    L3B --> L3B1["[3,2,1] ✓"]
+```java
+public List<List<Integer>> permute(int[] nums) {
+    List<List<Integer>> res = new ArrayList<>();
+    backtrack(res, new ArrayList<>(), nums, new boolean[nums.length]);
+    return res;
+}
+private void backtrack(List<List<Integer>> res, List<Integer> path, int[] nums, boolean[] used) {
+    if (path.size() == nums.length) { res.add(new ArrayList<>(path)); return; }
+    for (int i = 0; i < nums.length; i++) {
+        if (used[i]) continue;
+        used[i] = true; path.add(nums[i]);
+        backtrack(res, path, nums, used);
+        path.remove(path.size() - 1); used[i] = false;
+    }
+}
 ```
 
-### 9.2 N 皇后
+### 9.2 子集 + 组合总和 + N 皇后
 
-```
-4 皇后问题 — 每行放一个皇后, 不能互相攻击
+```java
+// 子集
+public List<List<Integer>> subsets(int[] nums) {
+    List<List<Integer>> res = new ArrayList<>();
+    dfs(res, new ArrayList<>(), nums, 0);
+    return res;
+}
+private void dfs(List<List<Integer>> res, List<Integer> path, int[] nums, int start) {
+    res.add(new ArrayList<>(path));
+    for (int i = start; i < nums.length; i++) {
+        path.add(nums[i]); dfs(res, path, nums, i + 1); path.remove(path.size()-1);
+    }
+}
 
-  . Q . .      . . Q .
-  . . . Q      Q . . .
-  Q . . .      . . . Q
-  . . Q .      . Q . .
+// 组合总和 (可重复选)
+public List<List<Integer>> combinationSum(int[] cand, int target) {
+    List<List<Integer>> res = new ArrayList<>();
+    dfs2(res, new ArrayList<>(), cand, target, 0);
+    return res;
+}
+private void dfs2(List<List<Integer>> res, List<Integer> path, int[] cand, int remain, int start) {
+    if (remain < 0) return;
+    if (remain == 0) { res.add(new ArrayList<>(path)); return; }
+    for (int i = start; i < cand.length; i++) {
+        path.add(cand[i]); dfs2(res, path, cand, remain-cand[i], i); path.remove(path.size()-1);
+    }
+}
 
-★ 约束: 不能同行 / 同列 / 同对角线
-  对角线公式:  row-col 相同 = 同一主对角线
-              row+col 相同 = 同一副对角线
+// N 皇后
+public List<List<String>> solveNQueens(int n) {
+    List<List<String>> res = new ArrayList<>();
+    char[][] board = new char[n][n];
+    for (char[] row : board) Arrays.fill(row, '.');
+    dfsNQ(res, board, 0, new boolean[n], new boolean[2*n], new boolean[2*n]);
+    return res;
+}
+private void dfsNQ(List<List<String>> res, char[][] board, int row,
+        boolean[] cols, boolean[] d1, boolean[] d2) {
+    int n = board.length;
+    if (row == n) { List<String> sol = new ArrayList<>();
+        for (char[] r : board) sol.add(new String(r)); res.add(sol); return; }
+    for (int col = 0; col < n; col++) {
+        if (cols[col] || d1[row-col+n] || d2[row+col]) continue;
+        board[row][col]='Q'; cols[col]=d1[row-col+n]=d2[row+col]=true;
+        dfsNQ(res, board, row+1, cols, d1, d2);
+        board[row][col]='.'; cols[col]=d1[row-col+n]=d2[row+col]=false;
+    }
+}
 ```
 
 ---
 
 ## 10. 动态规划
 
-### 10.1 01 背包 — 为什么倒序
+### 10.1 01 背包 (一维优化)
 
-```mermaid
-flowchart LR
-    subgraph FORWARD["正序 (错误!)"]
-        F1["dp[0]=0"] --> F2["更新dp[1]用dp[0]"]
-        F2 --> F3["更新dp[2]用dp[1]"]
-        F3 --> F4["★ dp[2]用了刚更新的dp[1]<br/>同一物品被用了多次!"]
-    end
-    subgraph BACKWARD["倒序 (正确)"]
-        B3["更新dp[2]用dp[1](旧值)"] --> B2["更新dp[1]用dp[0](旧值)"]
-        B2 --> B1["更新dp[0]不依赖其他"]
-        B3 --> B4["★ 每个dp[j]只用到上一轮的旧值<br/>保证每个物品只用一次"]
-    end
+```java
+public int knapsack(int[] w, int[] v, int cap) {
+    int[] dp = new int[cap + 1];
+    for (int i = 0; i < w.length; i++)
+        for (int j = cap; j >= w[i]; j--)  // ★ 倒序!
+            dp[j] = Math.max(dp[j], dp[j - w[i]] + v[i]);
+    return dp[cap];
+}
 ```
 
-### 10.2 LIS — 纸牌游戏理解最长递增子序列
+### 10.2 最长递增子序列 (O(n log n))
 
-```
-nums = [3, 5, 6, 2, 5, 4, 19, 5, 6, 7, 8, 2, 7, 8]
-
-规则: 每张牌只能放在比它大的牌上面, 尽量放最左边.
-
-牌堆:
-  堆1: 3, 2, 2
-  堆2: 5, 5, 4
-  堆3: 6, 5, 5
-  堆4: 19, 6, 6
-  堆5: 7, 7
-  堆6: 8, 8
-
-★ LIS 长度 = 堆的数量 = 6
+```java
+// 纸牌堆算法
+public int lengthOfLIS(int[] nums) {
+    List<Integer> tails = new ArrayList<>();
+    for (int x : nums) {
+        int i = Collections.binarySearch(tails, x);
+        if (i < 0) i = -(i + 1);
+        if (i == tails.size()) tails.add(x);
+        else tails.set(i, x);
+    }
+    return tails.size();
+}
 ```
 
-### 10.3 编辑距离 — 莱文斯坦距离
+### 10.3 编辑距离 + LCS
 
-```
-word1 = "horse", word2 = "ros"
+```java
+// 编辑距离
+public int minDistance(String a, String b) {
+    int m = a.length(), n = b.length();
+    int[][] dp = new int[m+1][n+1];
+    for (int i = 0; i <= m; i++) dp[i][0] = i;
+    for (int j = 0; j <= n; j++) dp[0][j] = j;
+    for (int i = 1; i <= m; i++)
+        for (int j = 1; j <= n; j++)
+            if (a.charAt(i-1) == b.charAt(j-1)) dp[i][j] = dp[i-1][j-1];
+            else dp[i][j] = 1 + Math.min(dp[i-1][j], Math.min(dp[i][j-1], dp[i-1][j-1]));
+    return dp[m][n];
+}
 
-dp 表格 (纵向: horse, 横向: ros):
-
-    "" r  o  s
-""   0  1  2  3
-h    1  1  2  3
-o    2  2  1  2
-r    3  2  2  2
-s    4  3  3  2
-e    5  4  4  3  ← 答案: dp[5][3] = 3
-
-操作:
-  horse → rorse (h→r)
-  rorse → rose  (删r)
-  rose  → ros   (删e)
-```
-
----
-
-## 11. 图论
-
-### 11.1 Dijkstra — 贪心找最短
-
-```mermaid
-flowchart TB
-    subgraph GRAPH["图"]
-        S["S(0)"] -->|"7"| A["A"]
-        S -->|"2"| B["B"]
-        A -->|"3"| T["T"]
-        B -->|"6"| A
-        B -->|"1"| T
-    end
-
-    subgraph STEPS["Dijkstra 过程"]
-        ST1["1. S=0 确定, 更新 A=7, B=2"]
-        ST2["2. 选最小 B=2, 更新 A=min(7,2+6=8)=7, T=min(∞,2+1=3)"]
-        ST3["3. 选 T=3 确定, 到达终点!"]
-        ST4["★ 最短路径: S→B→T = 3"]
-    end
-
-    GRAPH -.-> STEPS
-```
-
-### 11.2 拓扑排序 — 选课顺序
-
-```
-课程依赖: A→C, B→C, C→D, C→E
-(先修 A 和 B 才能修 C, 修完 C 才能修 D 和 E)
-
-入度: A=0, B=0, C=2, D=1, E=1
-
-BFS:
-  Round 1: 入度为 0 的入队 → [A, B]
-  Round 2: 出 A, C 入度-1=1; 出 B, C 入度-1=0 → C 入队 → [C]
-  Round 3: 出 C, D入度=0, E入度=0 → [D, E]
-  Round 4: 出 D, 出 E
-
-结果: [A, B, C, D, E] (或者 [B, A, C, D, E] 等)
+// 最长公共子序列
+public int longestCommonSubsequence(String a, String b) {
+    int m = a.length(), n = b.length();
+    int[][] dp = new int[m+1][n+1];
+    for (int i = 1; i <= m; i++)
+        for (int j = 1; j <= n; j++)
+            dp[i][j] = a.charAt(i-1) == b.charAt(j-1) ? dp[i-1][j-1] + 1
+                     : Math.max(dp[i-1][j], dp[i][j-1]);
+    return dp[m][n];
+}
 ```
 
 ---
 
-# 高级篇
+## 11. 贪心算法
 
-## 12. Trie 前缀树
+```java
+// 跳跃游戏
+public boolean canJump(int[] nums) {
+    int max = 0;
+    for (int i = 0; i < nums.length; i++) {
+        if (i > max) return false;
+        max = Math.max(max, i + nums[i]);
+    }
+    return true;
+}
 
-```mermaid
-flowchart TB
-    ROOT["root"] --> A["a"] & B["b"]
-
-    A --> P["p"]
-    P --> P2["p"] --> P3["l"] --> E1["e★=true"]
-    P --> P4["t"]
-
-    B --> E["e"]
-    E --> D["d"]
-    E --> N["n"] --> T["t"]
-
-    subgraph WORDS["存储的单词"]
-        W1["apple: root→a→p→p→l→e★"]
-        W2["app: root→a→p→p★"]
-        W3["bed: root→b→e→d★"]
-        W4["bent: root→b→e→n→t★"]
-    end
+// 最大不重叠区间数
+public int maxNonOverlap(int[][] intervals) {
+    Arrays.sort(intervals, (a, b) -> a[1] - b[1]);
+    int count = 0, end = Integer.MIN_VALUE;
+    for (int[] it : intervals) if (it[0] >= end) { count++; end = it[1]; }
+    return count;
+}
 ```
 
 ---
 
-## 13. 并查集 Union-Find
+## 12. 堆
 
-```mermaid
-flowchart TB
-    subgraph INIT["初始: 各自独立"]
-        I1["0"] & I2["1"] & I3["2"] & I4["3"] & I5["4"]
-    end
+### 12.1 Top K + 中位数
 
-    subgraph MERGE["union(0,1) union(1,2) union(3,4)"]
-        M1["0→1→2"] & M2["3→4"]
-    end
+```java
+// Top K
+public int[] topK(int[] nums, int k) {
+    PriorityQueue<Integer> pq = new PriorityQueue<>();
+    for (int x : nums) { pq.offer(x); if (pq.size() > k) pq.poll(); }
+    return pq.stream().mapToInt(i->i).toArray();
+}
 
-    subgraph FIND["find(0) = 2"]
-
-    end
-
-    subgraph COMPRESS["路径压缩后"]
-        C1["0→2, 1→2"] & C2["3→4"]
-    end
-
-    INIT --> MERGE
-    MERGE --> COMPRESS
-```
-
-```
-★ 两步优化:
-  路径压缩: find 时把路径上所有节点直接连到根
-  按秩合并: 小树连到大树下面, 避免退化成链表
-
-  优化后: 操作近乎 O(1) (阿克曼函数反函数 α(n) ≤ 4)
+// 数据流中位数
+class MedianFinder {
+    PriorityQueue<Integer> lo = new PriorityQueue<>((a,b)->b-a); // 大顶堆
+    PriorityQueue<Integer> hi = new PriorityQueue<>();           // 小顶堆
+    
+    public void addNum(int num) {
+        lo.offer(num); hi.offer(lo.poll());
+        if (hi.size() > lo.size()) lo.offer(hi.poll());
+    }
+    public double findMedian() {
+        return lo.size() > hi.size() ? lo.peek() : (lo.peek() + hi.peek()) / 2.0;
+    }
+}
 ```
 
 ---
 
-## 14. 线段树与树状数组
+## 13. 图论
 
-### 14.1 线段树结构
+### 13.1 拓扑排序 (BFS Kahn)
 
+```java
+public int[] topologicalSort(int n, int[][] edges) {
+    int[] indegree = new int[n];
+    List<Integer>[] g = new ArrayList[n];
+    for (int i = 0; i < n; i++) g[i] = new ArrayList<>();
+    for (int[] e : edges) { g[e[0]].add(e[1]); indegree[e[1]]++; }
+    
+    Queue<Integer> q = new LinkedList<>();
+    for (int i = 0; i < n; i++) if (indegree[i] == 0) q.offer(i);
+    
+    int[] order = new int[n]; int idx = 0;
+    while (!q.isEmpty()) {
+        int u = q.poll(); order[idx++] = u;
+        for (int v : g[u]) if (--indegree[v] == 0) q.offer(v);
+    }
+    return idx == n ? order : new int[0];
+}
 ```
-原始数组: [1, 3, 5, 7, 9, 11]
-线段树 (每个节点存区间和):
 
-                     [0-5]sum=36
-                    /           \
-            [0-2]sum=9        [3-5]sum=27
-           /        \         /        \
-    [0-1]sum=4  [2]sum=5  [3-4]sum=16  [5]sum=11
-     /      \
-[0]sum=1  [1]sum=3
+### 13.2 岛屿数量 (DFS Flood Fill) + 多源 BFS
 
-★ 查询 [1-4] 的和: [0-2]的右半 + [3-4] = 5 + 16 = 21
-  不用遍历 5 个元素, 只需 2 次 O(log n)
+```java
+// 岛屿数量
+public int numIslands(char[][] grid) {
+    int count = 0;
+    for (int i = 0; i < grid.length; i++)
+        for (int j = 0; j < grid[0].length; j++)
+            if (grid[i][j] == '1') { dfs(grid, i, j); count++; }
+    return count;
+}
+private void dfs(char[][] g, int i, int j) {
+    if (i<0||i>=g.length||j<0||j>=g[0].length||g[i][j]=='0') return;
+    g[i][j] = '0';
+    dfs(g,i+1,j); dfs(g,i-1,j); dfs(g,i,j+1); dfs(g,i,j-1);
+}
 ```
 
-### 14.2 树状数组 lowbit
+### 13.3 Dijkstra
 
+```java
+public int[] dijkstra(int n, int[][][] g, int start) {
+    int[] dist = new int[n]; Arrays.fill(dist, Integer.MAX_VALUE); dist[start]=0;
+    PriorityQueue<int[]> pq = new PriorityQueue<>((a,b)->a[1]-b[1]); pq.offer(new int[]{start,0});
+    while (!pq.isEmpty()) {
+        int[] cur = pq.poll(); int u = cur[0], d = cur[1];
+        if (d > dist[u]) continue;
+        for (int[] e : g[u]) {
+            int v = e[0], w = e[1];
+            if (dist[u] + w < dist[v]) { dist[v] = dist[u] + w; pq.offer(new int[]{v, dist[v]}); }
+        }
+    }
+    return dist;
+}
 ```
-lowbit = x & -x (取 x 二进制最低位的 1)
 
-x=6   = 0110
--x    = 1010 (补码)
-x&-x  = 0010 = 2
+---
 
-树状数组: tree[i] 管 [i-lowbit(i)+1, i] 区间的和
+## 14. 高级数据结构
 
-i=1 (0001): lowbit=1 → tree[1] 管 [1,1]
-i=2 (0010): lowbit=2 → tree[2] 管 [1,2]
-i=3 (0011): lowbit=1 → tree[3] 管 [3,3]
-i=4 (0100): lowbit=4 → tree[4] 管 [1,4]
-...
+### 14.1 Trie
+
+```java
+class Trie {
+    TrieNode root = new TrieNode();
+    static class TrieNode { TrieNode[] ch = new TrieNode[26]; boolean isEnd; }
+    
+    public void insert(String w) {
+        TrieNode node = root;
+        for (char c : w.toCharArray()) {
+            int i = c-'a';
+            if (node.ch[i] == null) node.ch[i] = new TrieNode();
+            node = node.ch[i];
+        }
+        node.isEnd = true;
+    }
+    public boolean search(String w) { TrieNode n = find(w); return n != null && n.isEnd; }
+    public boolean startsWith(String p) { return find(p) != null; }
+    private TrieNode find(String p) {
+        TrieNode node = root;
+        for (char c : p.toCharArray()) { node = node.ch[c-'a']; if (node == null) return null; }
+        return node;
+    }
+}
+```
+
+### 14.2 并查集
+
+```java
+class UnionFind {
+    int[] p, rank;
+    UnionFind(int n) { p = new int[n]; rank = new int[n]; for (int i = 0; i < n; i++) p[i] = i; }
+    int find(int x) { return p[x] == x ? x : (p[x] = find(p[x])); }
+    boolean union(int x, int y) {
+        int px = find(x), py = find(y); if (px == py) return false;
+        if (rank[px] < rank[py]) p[px] = py; else if (rank[px] > rank[py]) p[py] = px;
+        else { p[py] = px; rank[px]++; }
+        return true;
+    }
+}
+```
+
+### 14.3 树状数组 (BIT)
+
+```java
+class BIT {
+    int[] tree;
+    BIT(int n) { tree = new int[n+1]; }
+    void add(int i, int delta) { while (i < tree.length) { tree[i] += delta; i += i & -i; } }
+    int sum(int i) { int s = 0; while (i > 0) { s += tree[i]; i -= i & -i; } return s; }
+    int range(int l, int r) { return sum(r) - sum(l-1); }
+}
+```
+
+### 14.4 线段树 (带 lazy)
+
+```java
+class SegTree {
+    int[] tree, lazy; int n;
+    SegTree(int[] nums) {
+        n = nums.length; tree = new int[4*n]; lazy = new int[4*n];
+        build(nums, 0, 0, n-1);
+    }
+    void build(int[] nums, int node, int lo, int hi) {
+        if (lo == hi) { tree[node] = nums[lo]; return; }
+        int mid = lo+(hi-lo)/2;
+        build(nums, node*2+1, lo, mid); build(nums, node*2+2, mid+1, hi);
+        tree[node] = tree[node*2+1] + tree[node*2+2];
+    }
+    void update(int l, int r, int val) { update(0, 0, n-1, l, r, val); }
+    private void update(int node, int lo, int hi, int l, int r, int val) {
+        if (lazy[node] != 0) { push(node, lo, hi); }
+        if (lo > r || hi < l) return;
+        if (l <= lo && hi <= r) { tree[node] += (hi-lo+1)*val; if (lo!=hi) { lazy[node*2+1]+=val; lazy[node*2+2]+=val; } return; }
+        int mid = lo+(hi-lo)/2;
+        update(node*2+1, lo, mid, l, r, val); update(node*2+2, mid+1, hi, l, r, val);
+        tree[node] = tree[node*2+1] + tree[node*2+2];
+    }
+    private void push(int node, int lo, int hi) { tree[node]+=(hi-lo+1)*lazy[node]; if(lo!=hi){lazy[node*2+1]+=lazy[node];lazy[node*2+2]+=lazy[node];} lazy[node]=0; }
+}
+```
+
+### 14.5 LRU / LFU
+
+```java
+// LRU
+class LRUCache extends LinkedHashMap<Integer,Integer> {
+    int cap;
+    LRUCache(int c) { super(c, 0.75f, true); cap = c; }
+    protected boolean removeEldestEntry(Map.Entry<Integer,Integer> e) { return size() > cap; }
+    int get(int k) { return super.getOrDefault(k, -1); }
+}
 ```
 
 ---
 
 ## 15. 字符串算法
 
-### 15.1 KMP — next 数组的本质
+```java
+// KMP
+public int kmp(String s, String p) {
+    int[] next = new int[p.length()];
+    for (int i=1,j=0; i<p.length(); i++) {
+        while (j>0 && p.charAt(i)!=p.charAt(j)) j=next[j-1];
+        if (p.charAt(i)==p.charAt(j)) j++; next[i]=j;
+    }
+    for (int i=0,j=0; i<s.length(); i++) {
+        while (j>0 && s.charAt(i)!=p.charAt(j)) j=next[j-1];
+        if (s.charAt(i)==p.charAt(j)) j++;
+        if (j==p.length()) return i-j+1;
+    }
+    return -1;
+}
 
-```
-pattern = "ababc"
-
-next[i] = pattern[0..i] 的最长相同前后缀长度
-
-i=0: "a"        → 前后缀 "" = 0      next[0]=0
-i=1: "ab"       → 前后缀 "" = 0      next[1]=0
-i=2: "aba"      → 前后缀 "a" = 1     next[2]=1
-i=3: "abab"     → 前后缀 "ab" = 2    next[3]=2
-i=4: "ababc"    → 前后缀 "" = 0      next[4]=0
-
-next=[0,0,1,2,0]
-
-★ 匹配失败时: j = next[j-1]
-  (不用回到开头, 跳到"已知能匹配"的最长前缀位置继续试)
-```
-
-```mermaid
-flowchart LR
-    subgraph MATCH["匹配过程"]
-        T["text: abababc"] & P["pattern: ababc"]
-    end
-    subgraph FAIL["匹配到 i=4 失败"]
-        F1["已匹配 'abab' → next[3]=2 → 跳到 pattern[2]='a' 继续"]
-    end
-    MATCH --> FAIL
-```
-
----
-
-## 16. 位运算技巧
-
-### 16.1 位运算全景
-
-```
-x & 1          → 判奇偶: 奇数返回1, 偶返回0
-x & (x-1)      → ★ 消除最低位 1 (统计 1 的个数, 判 2 的幂)
-x & -x         → ★ 获取最低位 1 (树状数组 lowbit)
-x ^ x          → 0  (相同异或得 0)
-x ^ 0          → x  (与 0 异或不变)
-a ^ b ^ a      → b  (异或满足交换律, 可用于找唯一出现数)
-
-举例: x=12 (1100)
-  x-1  = 1011
-  x&(x-1) = 1000 = 8  ← 最低位 1 被消除!
+// Rabin-Karp (滚动哈希)
+public int rabinKarp(String s, String p) {
+    int BASE=256, MOD=1_000_000_007, n=s.length(), m=p.length();
+    long pHash=0, tHash=0, bm=1;
+    for (int i=0; i<m; i++) { pHash=(pHash*BASE+p.charAt(i))%MOD; bm=bm*BASE%MOD; }
+    for (int i=0; i<n; i++) {
+        tHash=(tHash*BASE+s.charAt(i))%MOD;
+        if (i>=m) tHash=(tHash-s.charAt(i-m)*bm%MOD+MOD)%MOD;
+        if (i>=m-1 && tHash==pHash && s.substring(i-m+1,i+1).equals(p)) return i-m+1;
+    }
+    return -1;
+}
 ```
 
 ---
 
-## 17. 设计模式题
+## 16. Spring 源码落地速查
 
-### 17.1 LRU — 哈希表 + 双向链表
-
-```mermaid
-flowchart LR
-    subgraph LRU["LRU Cache"]
-        MAP["HashMap<br/>key → Node"]
-        DLL["双向链表<br/>head ↔ Node1 ↔ Node2 ↔ tail<br/>(最近使用)      (最久未用)"]
-        MAP --> DLL
-    end
-
-    subgraph GET["get(key)"]
-        G1["查 HashMap → O(1) 找到 Node"]
-        G2["★ 把 Node 移到链表头 (最近使用)"]
-    end
-
-    subgraph PUT["put(key,val)"]
-        P1["满了? → 删链表尾 (最久未用)"]
-        P2["新 Node 插入链表头"]
-    end
-```
+| 算法/结构 | Spring 类 | 做什么 |
+|----------|----------|--------|
+| **ConcurrentHashMap** | `DefaultSingletonBeanRegistry` | Bean 三级缓存 O(1)查找 |
+| **ArrayList** | `HandlerExecutionChain` | 有序拦截器链 |
+| **LinkedList** | `ReflectiveMethodInvocation` | AOP 责任链 |
+| **Stack(Deque)** | `FilterChainProxy` | 安全过滤器 |
+| **PriorityQueue** | `ThreadPoolTaskScheduler` | 定时任务调度 |
+| **TreeMap** | `AnnotationAwareOrderComparator` | @Order 排序 |
+| **LinkedHashMap** | `CaffeineCache` | LRU 缓存 |
+| **拓扑排序** | `@DependsOn` 解析 | Bean 初始化顺序 |
+| **DFS** | `ClassPathScanner` | 组件扫描 |
+| **Trie变体** | `AntPathMatcher` | URL 模式匹配 |
+| **二分** | `PropertyResolver` | 属性定位 |
+| **滑动窗口** | `RequestRateLimiter` | 网关限流 |
+| **贪心** | `HttpMessageConverter` | 最佳匹配 |
+| **位图** | `ConditionEvaluator` | 条件评估 |
+| **分治** | `DispatcherServlet.doDispatch` | 请求分发 |
 
 ---
 
-## 18. 算法在 Spring 全家桶中的应用
-
-### 18.1 HashMap → IoC 容器三级缓存
-
-```
-Spring 为什么用 ConcurrentHashMap 存 Bean?
-
-  getBean("userService") 的查找过程:
-    L1 → L2 → L3, 每层都是 HashMap.get() = O(1)
-
-  如果用 ArrayList: 1000 个 Bean, 平均查 500 次 = O(n)
-  用 HashMap: 1 次 hash 运算 = O(1)
-```
-
-### 18.2 拓扑排序 → @DependsOn
-
-```
-@DependsOn("dataSource") → dataSource 必须在当前 Bean 之前初始化
-
-Spring 内部: 对 Bean 依赖图做拓扑排序
-  边的方向: 被依赖的 → 依赖它的 (B 被 A 依赖 → B→A)
-  无环 → 生成拓扑序 → 依次初始化
-  有环 → BeanCurrentlyInCreationException!
-```
-
-### 18.3 Trie 变体 → AntPathMatcher
-
-```
-URL 模式匹配: /api/users/**/orders
-
-拆成: ["api", "users", "**", "orders"]
-逐段匹配:
-  /api → ✓
-  /api/users → ✓
-  /api/users/123 → ** 匹配任意段 ✓
-  /api/users/123/orders → ✓
-
-本质是 Trie 的通配符变体。
-```
-
-### 18.4 分治 → DispatcherServlet
-
-```
-doDispatch() 的三大步:
-
-  getHandler()    → 分解: 找出谁处理这个请求
-      ↓
-  handle()        → 治理: 执行处理器 (Controller)
-      ↓
-  processResult() → 合并: 渲染结果 (JSON/HTML 返回)
-```
-
-### 18.5 LRU → Caffeine 缓存
-
-```
-Spring Cache 默认用 Caffeine (W-TinyLFU, LRU 的进化):
-
-  @Cacheable("users")
-  public User getUser(Long id) { ... }
-
-  缓存满了 → 驱逐最不常用的条目
-  底层: ConcurrentHashMap + 频率计数器
-```
-
-### 18.6 贪心 → MessageConverter 选择
-
-```
-返回 JSON 还是 XML? Spring 选第一个能处理的 Converter:
-
-  for (HttpMessageConverter c : converters)
-      if (c.canWrite(type)) return c;  // ★ 贪婪匹配
-
-  converters 列表已排好序:
-    1. MappingJackson2HttpMessageConverter (JSON)
-    2. Jaxb2RootElementHttpMessageConverter (XML)
-    ...
-```
-
----
-
-*全文 18 章图文版，每个算法配有图解 + 代码 + Spring 应用场景。*
+*全文 16 章图文+代码版，覆盖 50+ 核心算法，全部配有 Java 实现 + Spring 应用。*
