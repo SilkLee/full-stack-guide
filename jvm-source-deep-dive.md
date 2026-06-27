@@ -1446,7 +1446,7 @@ flowchart TB
         Carrier1 --> OS_A["OS 线程"]
         Carrier2 --> OS_B["OS 线程"]
         
-        NoteV['M:N 映射<br/>虚拟线程在阻塞时自动"卸下"<br/>让 Carrier 线程处理其他虚拟线程<br/>默认栈：按需动态增长']
+        NoteV["M:N 映射<br/>虚拟线程在阻塞时自动卸下<br/>让 Carrier 线程处理其他虚拟线程<br/>默认栈：按需动态增长"]
     end
 ```
 
